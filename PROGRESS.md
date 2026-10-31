@@ -5,7 +5,7 @@
 
 ## 阶段状态
 
-- P1 服务骨架与契约：进行中
+- P1 服务骨架与契约：完成
   - [x] 仓库目录 + 方案文档 docs/implementation-plan.md
   - [x] PROGRESS.md / README / .gitignore
   - [x] server 骨架（Koa + routing-controllers + typedi + Prisma/SQLite，strict TS）
@@ -13,7 +13,7 @@
   - [x] contracts/openapi.yaml + 契约测试（Ajv 2020 校验实时响应；tests/contract.test.ts 12/12）
   - [x] web 管理 SPA（React + Vite + Tailwind）：登录/概览/源/内容测试/任务/日志/缓存/Token
   - [x] GitHub 公开仓库 PordoTech/pordo-service 推送（初始提交 779400c，63 文件）
-- P2 真实源与闭环：进行中
+- P2 真实源与闭环：完成
   - [x] ProviderRegistry + ComicProvider/VideoProvider 强类型接口
   - [x] Komiic 适配器（GraphQL、登录/刷新/单飞/epoch、quota 402、票据一次刷新、并发2、去重）
   - [x] MangaYun 适配器（签名协议、sites/search/details/chapter-images、图片直连/中继）——离线测试通过
