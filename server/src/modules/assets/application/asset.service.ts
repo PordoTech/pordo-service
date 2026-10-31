@@ -5,7 +5,7 @@ import type { Context } from 'koa'
 import { ApiError, badRequest, forbidden, notFound } from '../../../shared/errors'
 import { httpUrl } from '../../../shared/http'
 import { signAsset, verifyAsset } from '../../../shared/crypto'
-import { inFlight, semaphoreFor } from '../../../shared/scheduler'
+import { semaphoreFor } from '../../../shared/scheduler'
 import { logRequest } from '../../../shared/envelope'
 import { ProviderRegistry } from '../../providers/registry'
 import { SourceService } from '../../sources/application/source.service'
@@ -35,6 +35,7 @@ const PRIVATE_V4 = [
  */
 @Service()
 export class AssetService {
+  private pending = new Map<string, Promise<void>>()
   private registry = Container.get(ProviderRegistry)
   private sources = Container.get(SourceService)
   private cache = Container.get(ImageCache)
@@ -74,7 +75,7 @@ export class AssetService {
   }> {
     if (items.length > 500) throw badRequest('Too many items (max 500)')
     return items.map((item) => {
-      if (!this.registry.hasComic(item.provider)) {
+      if (!this.registry.hasComic(item.provider || 'mangayun')) {
         throw notFound(`Unknown provider: ${item.provider}`, 'SOURCE_NOT_FOUND')
       }
       httpUrl(item.url)
@@ -121,19 +122,31 @@ export class AssetService {
    * the client. Never buffers whole originals in RAM.
    */
   async serve(ctx: Context, assetId: string, requestId: string): Promise<void> {
+    if (ctx.res.destroyed) return
     const ref = this.parse(assetId)
-    await this.sources.requireEnabled(ref.provider)
-    const runtime = await this.registry.runtime(ref.provider)
-    const provider = this.registry.comic(ref.provider)
-    const accountCtx = await this.sources.contentContext(ref.provider, {
+    const providerId = ref.provider || 'mangayun'
+    await this.sources.requireEnabled(providerId)
+    const runtime = await this.registry.runtime(providerId)
+    const provider = this.registry.comic(providerId)
+    const accountCtx = await this.sources.contentContext(providerId, {
       siteId: ref.siteId,
     })
     await this.assertPublicDestination(ref.url, runtime.config)
 
     const { ttlSeconds } = await this.cache.settings()
-    const cacheId = this.cache.entryId(ref.provider, accountCtx.contextId, ref.url)
+    const cacheId = this.cache.entryId(providerId, accountCtx.contextId, ref.url)
 
+    // Each HTTP response owns its readable. Other devices wait for the shared
+    // cache fill, then open independent file streams rather than sharing a pipe.
+    const pending = this.pending.get(cacheId)
+    if (pending) await pending.catch(() => {})
     const hit = await this.cache.read(cacheId)
+    if (ctx.res.destroyed) { hit?.body.destroy(); return }
+    // Recheck after async disk lookup: another request may have started a fill.
+    if (!hit && this.pending.has(cacheId)) {
+      await this.pending.get(cacheId)!.catch(() => {})
+      return this.serve(ctx, assetId, requestId)
+    }
     const started = Date.now()
     if (hit) {
       ctx.status = 200
@@ -153,53 +166,45 @@ export class AssetService {
       return
     }
 
-    // Cancellation: abort the upstream fetch when the client disconnects.
-    const abort = new AbortController()
-    ctx.res.on('close', () => {
-      if (!ctx.res.writableEnded) abort.abort()
-    })
-    const fetchCtx = { ...accountCtx, signal: abort.signal }
-
+    // Complete a started cache fill even if the first reader closes, so other
+    // devices remain independent. The provider's timeout bounds the transfer.
     const sem = semaphoreFor(
-      `asset:${ref.provider}:${accountCtx.contextId}`,
+      `asset:${providerId}:${accountCtx.contextId}`,
       Math.min(runtime.concurrency, provider.id === 'komiic' ? 2 : runtime.concurrency),
     )
+    let finish!: () => void
+    const filling = new Promise<void>((resolve) => { finish = resolve })
+    this.pending.set(cacheId, filling)
+    let release: (() => void) | undefined
+    const complete = (): void => {
+      release?.()
+      if (this.pending.get(cacheId) === filling) this.pending.delete(cacheId)
+      finish()
+    }
     try {
-      const upstream = await sem.run(
-        () =>
-          inFlight.dedupe(`asset:${cacheId}`, async () => {
-            const image = await provider.fetchImage(ref.url, fetchCtx)
-            const { clientBody, done } = this.cache.write(cacheId, image.body, {
-              sourceId: ref.provider,
-              contextId: accountCtx.contextId,
-              url: ref.url,
-              contentType: image.contentType,
-              ttlSeconds,
-            })
-            void done.then((size) => {
-              void logRequest({
-                requestId,
-                kind: 'upstream',
-                sourceId: ref.provider,
-                op: 'asset.miss',
-                status: 200,
-                durationMs: Date.now() - started,
-                detail: size === null ? 'cache write skipped' : `${size} bytes cached`,
-              })
-            })
-            return { clientBody, contentType: image.contentType }
-          }),
-        abort.signal,
-      )
+      release = await sem.acquire()
+      const image = await provider.fetchImage(ref.url, accountCtx)
+      const { clientBody, done } = this.cache.write(cacheId, image.body, {
+        sourceId: providerId, contextId: accountCtx.contextId, url: ref.url,
+        contentType: image.contentType, ttlSeconds,
+      })
+      const deadline = setTimeout(() => image.body.destroy(new Error('Image transfer timed out')), runtime.timeoutMs)
+      deadline.unref()
+      void done.then((size) => {
+        clearTimeout(deadline)
+        complete()
+        void logRequest({ requestId, kind: 'upstream', sourceId: providerId,
+          op: 'asset.miss', status: 200, durationMs: Date.now() - started,
+          detail: size === null ? 'cache write skipped' : `${size} bytes cached` })
+      }, () => { clearTimeout(deadline); complete() })
+      if (ctx.res.destroyed) { clientBody.destroy(); return }
       ctx.status = 200
-      ctx.set('Content-Type', upstream.contentType)
+      ctx.set('Content-Type', image.contentType)
       ctx.set('Cache-Control', 'private, max-age=3600')
       ctx.set('X-Cache', 'MISS')
-      ctx.body = upstream.clientBody
+      ctx.body = clientBody
     } catch (error) {
-      if (error instanceof Error && error.message === 'aborted') {
-        throw new ApiError(499, 'REQUEST_CANCELLED', 'Request cancelled by client')
-      }
+      complete()
       throw error
     }
   }

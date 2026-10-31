@@ -2,7 +2,6 @@ import { Service } from 'typedi'
 import type { Readable } from 'node:stream'
 import { ApiError, badRequest } from '../../../shared/errors'
 import { headerValue, httpUrl, readJsonLimited, sendUpstream } from '../../../shared/http'
-import { inFlight, semaphoreFor } from '../../../shared/scheduler'
 import type {
   AccountConfigSchemaField,
   AccountState,
@@ -442,14 +441,9 @@ export class KomiicProvider {
         throw badRequest('无效图片编号 / Invalid image ID')
       }
       const session = this.session(ctx)
-      const sem = semaphoreFor(`komiic:${ctx.sourceId}:${ctx.contextId}`, 2)
-      return sem.run(
-        () =>
-          inFlight.dedupe(`komiic:${ctx.sourceId}:${ctx.contextId}:${kid}`, () =>
-            this.fetchTicketed(ctx, session, kid),
-          ),
-        ctx.signal,
-      )
+      // The asset application service owns scheduling/cache-fill deduplication.
+      // A readable stream must never be shared as a provider-level promise result.
+      return this.fetchTicketed(ctx, session, kid)
     }
     if (!(parsed.protocol === 'https:' && parsed.hostname === 'public.komiic.com')) {
       throw badRequest('无效 Komiic 图片地址 / Invalid image URL')

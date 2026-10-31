@@ -24,6 +24,7 @@ export interface ComicView {
 }
 
 export interface ChapterView {
+  url: string
   id: string
   key: string
   name: string
@@ -172,7 +173,7 @@ export class ComicService {
     if (items.length > 500) throw badRequest('Too many items (max 500)')
     const views: ComicView[] = []
     for (const item of items) {
-      if (!this.registry.hasComic(item.provider)) {
+      if (!this.registry.hasComic(item.provider || 'mangayun')) {
         throw notFound(`Unknown provider: ${item.provider}`, 'SOURCE_NOT_FOUND')
       }
       if (!item.siteId || !item.detailUrl) throw badRequest('siteId and detailUrl are required')
@@ -232,7 +233,7 @@ export class ComicService {
         '漫画未解析，请先调用 /api/v1/comics/resolve / Comic not resolved',
       )
     }
-    await this.sources.requireEnabled(ref.provider)
+    await this.sources.requireEnabled(ref.provider || 'mangayun')
     return ref
   }
 
@@ -259,17 +260,20 @@ export class ComicService {
   /** Fetch detail with a short in-memory cache to avoid duplicate upstream calls. */
   async detail(comicId: string, refresh = false, signal?: AbortSignal): Promise<ComicDetail> {
     const ref = await this.requireRef(comicId)
+    const provider = this.registry.comic(ref.provider || 'mangayun')
+    const ctx = await this.sources.contentContext(ref.provider || 'mangayun', { siteId: ref.siteId, signal })
+    const cacheKey = `${comicId}\u0000${ctx.contextId}`
     if (!refresh) {
-      const cached = this.detailCache.get(comicId)
+      const cached = this.detailCache.get(cacheKey)
       if (cached && Date.now() - cached.at < DETAIL_CACHE_MS) return cached.detail
     }
-    const provider = this.registry.comic(ref.provider)
-    const ctx = await this.sources.contentContext(ref.provider, {
-      siteId: ref.siteId,
-      signal,
-    })
     const detail = await provider.detail(this.refToBook(ref), ctx)
-    this.detailCache.set(comicId, { detail, at: Date.now() })
+    // Transport/baseUrl overrides must never replace persisted content identity.
+    detail.book.provider = ref.provider
+    detail.book.siteId = ref.siteId
+    detail.book.detailUrl = ref.detailUrl
+    if (this.detailCache.size >= 512) this.detailCache.clear()
+    this.detailCache.set(cacheKey, { detail, at: Date.now() })
     const lastChapter = detail.chapters[detail.chapters.length - 1]
     await prisma.comicRef.update({
       where: { id: comicId },
@@ -294,6 +298,7 @@ export class ComicService {
 
   chapterView(chapter: ComicChapter): ChapterView {
     return {
+      url: chapter.url,
       id: chapter.id,
       key: chapter.id || chapter.url,
       name: chapter.name,
@@ -313,8 +318,8 @@ export class ComicService {
     if (!chapter) {
       throw notFound('章节不存在 / Chapter not found', 'CHAPTER_NOT_FOUND')
     }
-    const provider = this.registry.comic(detail.book.provider)
-    const ctx = await this.sources.contentContext(detail.book.provider, {
+    const provider = this.registry.comic(detail.book.provider || 'mangayun')
+    const ctx = await this.sources.contentContext(detail.book.provider || 'mangayun', {
       siteId: detail.book.siteId,
       signal,
     })

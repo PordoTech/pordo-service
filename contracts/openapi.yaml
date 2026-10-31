@@ -61,6 +61,41 @@ paths:
                             items: { $ref: '#/components/schemas/PublicSource' }
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
 
+  /api/v1/sources/{sourceId}/sites:
+    get:
+      tags: [content]
+      operationId: listSourceSites
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Upstream sites of an enabled comic provider
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [sites]
+                        properties:
+                          sites:
+                            type: array
+                            items:
+                              type: object
+                              required: [siteId, siteName]
+                              properties:
+                                siteId: { type: string }
+                                siteName: { type: string }
+        '401': { $ref: '#/components/responses/ErrorEnvelope' }
+        '403': { $ref: '#/components/responses/ErrorEnvelope' }
+
   /api/v1/comics/search:
     get:
       tags: [content]
@@ -551,7 +586,7 @@ paths:
       tags: [admin-auth]
       operationId: changePassword
       summary: Change the admin password
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -671,7 +706,7 @@ paths:
       tags: [admin]
       operationId: updateSource
       summary: Update enable/priority/proxy/timeout/concurrency/config
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/SourceId' }]
       requestBody:
         required: true
@@ -747,7 +782,7 @@ paths:
         Save upstream account credentials (encrypted at rest with the master
         key). Empty password keeps the stored one; `clearPassword: true`
         removes it. Passwords are never echoed back; only `hasPassword`.
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/SourceId' }]
       requestBody:
         required: true
@@ -787,7 +822,7 @@ paths:
       tags: [admin]
       operationId: deleteAccount
       summary: Remove the stored account (logs out upstream first)
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/SourceId' }]
       responses:
         '200':
@@ -812,7 +847,7 @@ paths:
       tags: [admin]
       operationId: sourceLogin
       summary: Explicit manual login (single-flight; bypasses backoff once)
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/SourceId' }]
       responses:
         '200':
@@ -839,7 +874,7 @@ paths:
       tags: [admin]
       operationId: sourceLogout
       summary: Logout upstream and drop stored password/auto-login
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/SourceId' }]
       responses:
         '200':
@@ -867,7 +902,7 @@ paths:
       tags: [admin]
       operationId: testSearch
       summary: Admin-side search probe for a single source
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -904,7 +939,7 @@ paths:
       tags: [admin]
       operationId: testDetail
       summary: Resolve + fetch detail for an arbitrary original detail URL
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -943,7 +978,7 @@ paths:
       tags: [admin]
       operationId: testPages
       summary: Page list probe (first 20 pages) for browser verification
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -1098,7 +1133,7 @@ paths:
       tags: [admin]
       operationId: updateCache
       summary: Update cache cap/TTL
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -1132,7 +1167,7 @@ paths:
       tags: [admin]
       operationId: clearCache
       summary: Clear cached images (optionally per source)
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: false
         content:
@@ -1188,7 +1223,7 @@ paths:
       tags: [admin]
       operationId: createToken
       summary: Create a device token; plaintext returned exactly once
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       requestBody:
         required: true
         content:
@@ -1226,7 +1261,7 @@ paths:
       tags: [admin]
       operationId: revokeToken
       summary: Revoke a device token (immediately rejected afterwards)
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/TokenId' }]
       responses:
         '200':
@@ -1252,7 +1287,7 @@ paths:
       tags: [admin]
       operationId: deleteToken
       summary: Delete a device token record
-      security: [{ adminCookie: [] }, { csrfToken: [] }]
+      security: [{ adminCookie: [], csrfToken: [] }]
       parameters: [{ $ref: '#/components/parameters/TokenId' }]
       responses:
         '200':
@@ -1493,10 +1528,11 @@ components:
 
     ChapterView:
       type: object
-      required: [id, key, name, order, kind]
+      required: [id, key, url, name, order, kind]
       properties:
         id: { type: string }
         key: { type: string }
+        url: { type: string, description: Original upstream chapter URL }
         name: { type: string }
         order: { type: integer }
         kind: { type: string, enum: [chapter, volume] }

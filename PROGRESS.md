@@ -22,14 +22,14 @@
   - [x] resolve/prepare 兼容端点；updates/check 任务 + jobs 查询
   - [x] 管理页面完整闭环（概览/源/账号/测试/任务日志/缓存/Token）——浏览器验证通过
   - [x] 迁移行为断言测试（离线 mock；真实源显式测试）：komiic 8 + dm5 10 + mangayun 5 + api 2 + contract 12 = 37/37
-- P3 Pordo 接入：未开始
-  - [ ] pordo-core 服务客户端 + ComicSource 远程适配（桌面共用）
-  - [ ] pordo-android comics.rs 改服务源发现/搜索；移除 Komiic 账号 JNI/页面
-  - [ ] 服务连接设置（URL + Token 存 OS 凭据库）；旧收藏 resolve 迁移路径
-  - [ ] 清理客户端直连抓取与源账号实现（联通后）
-  - [ ] 回归：cargo fmt/clippy/test、macOS 构建、Android 构建/审计/离线 smoke
-  - [ ] 浏览器端到端验证：配置->登录->搜索->详情->取图->Token->Pordo 阅读
-  - [ ] 测量记录（RSS、耗时、缓存命中、包体/构建耗时对比）
+- P3 Pordo 接入：主 Codex 接手，客户端与服务契约联调已完成，等待 PR 审核
+  - [x] pordo-core 服务客户端 + ComicSource 远程适配（桌面共用）
+  - [x] pordo-android comics.rs 改服务源发现/搜索；移除 Komiic 账号 JNI/页面
+  - [x] 服务连接设置（URL + Token 存 OS 凭据库）；旧收藏 resolve 迁移路径
+  - [x] 清理客户端直连抓取与源账号实现（联通后）
+  - [x] 回归：cargo fmt/clippy/test、macOS 构建、Android 构建/审计/离线 smoke
+  - [x] 管理页面搜索/详情/取图、Rust/JNI 阅读链路及客户端设置渲染验证
+  - [x] 测量记录（RSS、耗时、缓存命中、包体/构建耗时对比）
   - [ ] 提交：pordo-service 推送公开仓库；replayer 功能分支 + draft PR
 
 ## 环境与约定
@@ -105,3 +105,13 @@
   - 发现并规避：inFlight.dedupe 对并发同资源会共享同一 PassThrough（多消费者隐患），
     顺序 MISS→HIT 测试不触及；本轮不引入并发同资源断言，留待 P3 评估是否需 per-consumer tee。
   - 修正 api.test.ts 一处 jobId 解构（应从 .data 取，非顶层）。
+
+- P3 接入修复（主 Codex）：增加受鉴权的源站点发现、章节原始 URL；保留空 provider 旧收藏及反向代理配置下的漫画身份；修复章节 path 参数二次解码。
+  同图请求共享落盘完成信号，每个响应独立读取，首个客户端取消不影响其他设备；并发许可保持至完整传输结束，增加传输时限和 40 MiB 上限。
+  移除 provider 层重复的流对象去重，目录缓存按账号隔离并设置上限，过期磁盘文件同步清理；OpenAPI 写管理权限改为 cookie + CSRF 同时要求。
+  新增客户端联调 fixture 和多设备/取消/旧收藏回归；40 项离线服务测试、strict TS 检查通过。原日志中多消费者隐患现已修复。
+
+- P3 验证补充：Komiic 真实账号在隔离服务中登录成功，通过真实服务 + Rust 客户端完成搜索、旧身份 resolve、162 章节/39 页目录和单页图片（263,793 B）原生解码，临时账号数据库随后清理。
+  Android API 28：21 项离线通过、3 项门控跳过；显式服务 fixture JNI 用例另行通过；正式签名 release APK 13 项审计和启动通过。
+  macOS：147 项普通测试、strict Clippy、真实服务用例、628/1030 px 设置渲染、release 媒体生命周期自测通过。
+  Windows 未实机验证；构建/包体/内存记录见客户端 docs/development.md，原始产物均在 target 下。

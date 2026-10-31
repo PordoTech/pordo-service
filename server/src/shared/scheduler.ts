@@ -17,14 +17,11 @@ export class Semaphore {
     return this.active
   }
 
-  async run<T>(task: (signal: { aborted: boolean }) => Promise<T>, abort?: AbortSignal): Promise<T> {
+  async acquire(abort?: AbortSignal): Promise<() => void> {
     if (abort?.aborted) throw new Error('aborted')
     while (this.active >= this.limit) {
       await new Promise<void>((resolve, reject) => {
-        const settle = (): void => {
-          abort?.removeEventListener('abort', onAbort)
-          resolve()
-        }
+        const settle = (): void => { abort?.removeEventListener('abort', onAbort); resolve() }
         const onAbort = (): void => {
           const index = this.queue.indexOf(settle)
           if (index >= 0) this.queue.splice(index, 1)
@@ -33,38 +30,24 @@ export class Semaphore {
         this.queue.push(settle)
         abort?.addEventListener('abort', onAbort, { once: true })
       })
+      if (abort?.aborted) { this.queue.shift()?.(); throw new Error('aborted') }
     }
     this.active += 1
-    try {
-      return await task({ aborted: abort?.aborted ?? false })
-    } finally {
+    let released = false
+    return () => {
+      if (released) return
+      released = true
       this.active -= 1
       this.queue.shift()?.()
     }
   }
-}
 
-/**
- * In-flight map: concurrent identical requests share one promise. Keys must
- * include the source/account context so results never cross account
- * boundaries.
- */
-export class InFlight {
-  private map = new Map<string, Promise<unknown>>()
-
-  async dedupe<T>(key: string, task: () => Promise<T>): Promise<T> {
-    const existing = this.map.get(key)
-    if (existing) return existing as Promise<T>
-    const promise = task().finally(() => {
-      if (this.map.get(key) === promise) this.map.delete(key)
-    })
-    this.map.set(key, promise)
-    return promise
+  async run<T>(task: (signal: { aborted: boolean }) => Promise<T>, abort?: AbortSignal): Promise<T> {
+    const release = await this.acquire(abort)
+    try { return await task({ aborted: abort?.aborted ?? false }) }
+    finally { release() }
   }
 
-  get size(): number {
-    return this.map.size
-  }
 }
 
 const semaphores = new Map<string, Semaphore>()
@@ -78,5 +61,3 @@ export const semaphoreFor = (context: string, limit: number): Semaphore => {
   }
   return sem
 }
-
-export const inFlight = new InFlight()

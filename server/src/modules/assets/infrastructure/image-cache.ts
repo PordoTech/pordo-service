@@ -108,21 +108,27 @@ export class ImageCache {
       let fileBroken = false
       out.on('error', () => {
         fileBroken = true
+        source.resume()
       })
       try {
         await new Promise<void>((resolve, reject) => {
           const pump = (): void => {
-            if (out.writableNeedDrain || clientBody.writableNeedDrain) source.pause()
+            if ((!fileBroken && out.writableNeedDrain) || (!clientBody.destroyed && clientBody.writableNeedDrain)) source.pause()
           }
           const resume = (): void => {
-            if (!out.writableNeedDrain && !clientBody.writableNeedDrain) source.resume()
+            if ((fileBroken || !out.writableNeedDrain) && (clientBody.destroyed || !clientBody.writableNeedDrain)) source.resume()
           }
           out.on('drain', resume)
           clientBody.on('drain', resume)
+          clientBody.on('close', resume)
           source.on('data', (chunk: Buffer) => {
             size += chunk.length
+            if (size > 40 * 1024 * 1024) {
+              source.destroy(new Error('Image exceeds 40 MiB limit'))
+              return
+            }
             if (!fileBroken && !out.write(chunk)) pump()
-            if (!clientBody.write(chunk)) pump()
+            if (!clientBody.destroyed && !clientBody.write(chunk)) pump()
           })
           source.on('end', () => resolve())
           source.on('error', reject)
@@ -130,7 +136,7 @@ export class ImageCache {
             // Client went away; keep persisting but stop delivering.
           })
         })
-        await new Promise<void>((resolve) => out.end(() => resolve()))
+        if (!fileBroken) await new Promise<void>((resolve) => out.end(() => resolve()))
         if (fileBroken) {
           await fsp.unlink(tmp).catch(() => {})
           return null
@@ -162,6 +168,7 @@ export class ImageCache {
         void this.enforceCap().catch(() => {})
         return size
       } catch {
+        out.destroy()
         await fsp.unlink(tmp).catch(() => {})
         return null
       }
@@ -205,9 +212,8 @@ export class ImageCache {
   /** Remove expired entries, then evict LRU until under the cap. */
   async enforceCap(maxBytes?: number): Promise<void> {
     const cap = maxBytes ?? (await this.settings()).maxBytes
-    await prisma.cacheEntry.deleteMany({
-      where: { expiresAt: { not: null, lt: new Date() } },
-    })
+    const expired = await prisma.cacheEntry.findMany({ where: { expiresAt: { not: null, lt: new Date() } }, select: { id: true } })
+    for (const entry of expired) await this.remove(entry.id)
     let total = (await prisma.cacheEntry.aggregate({ _sum: { size: true } }))._sum.size ?? 0
     if (total <= cap) return
     const batch = 200
