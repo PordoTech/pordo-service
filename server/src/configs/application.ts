@@ -18,11 +18,9 @@ import { ensureDataDir, STATIC_PATH } from './constants'
 import { ProviderRegistry, seedSources } from '../modules/providers/registry'
 import { SourceService } from '../modules/sources/application/source.service'
 import { ComicService } from '../modules/comics/application/comic.service'
-import { ImageCache } from '../modules/assets/infrastructure/image-cache'
 import { AdminAuthController } from '../controllers/admin-auth.controller'
 import { AdminController } from '../controllers/admin.controller'
 import { ContentController } from '../controllers/content.controller'
-import { AssetController } from '../controllers/asset.controller'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -94,7 +92,7 @@ export const createServer = async (): Promise<ServerHandle> => {
 
   useContainer(Container)
   useKoaServer<Koa>(koa, {
-    controllers: [AdminAuthController, AdminController, ContentController, AssetController],
+    controllers: [AdminAuthController, AdminController, ContentController],
     validation: false,
     // Let errors bubble to errorMiddleware for the JSON envelope; the
     // built-in handler would emit non-envelope bodies.
@@ -107,13 +105,11 @@ export const createServer = async (): Promise<ServerHandle> => {
     console.error('[koa.app.error]', err?.message, { url: ctx?.originalUrl || ctx?.url })
   })
 
-  // Housekeeping: log trimming, cache expiry and detail-cache pruning.
+  // Housekeeping: log trimming and detail-cache pruning.
   const comics = Container.get(ComicService)
-  const cache = Container.get(ImageCache)
   const timer = setInterval(() => {
     comics.pruneDetailCache()
     void trimLogs()
-    void cache.enforceCap().catch(() => {})
   }, 10 * 60 * 1000)
   timer.unref()
 

@@ -7,7 +7,7 @@ import { ComicService } from '../modules/comics/application/comic.service'
 import { JobService, type UpdateEntry } from '../modules/jobs/application/job.service'
 import { SourceService } from '../modules/sources/application/source.service'
 import { ProviderRegistry } from '../modules/providers/registry'
-import { AssetService } from '../modules/assets/application/asset.service'
+import { ImageService, type ImageRef } from '../modules/images/application/image.service'
 import { requireScope } from '../shared/middlewares'
 
 const abortOnClose = (ctx: Context): AbortSignal => {
@@ -24,7 +24,7 @@ export class ContentController {
   private comics = Container.get(ComicService)
   private jobs = Container.get(JobService)
   private sources = Container.get(SourceService)
-  private assets = Container.get(AssetService)
+  private images = Container.get(ImageService)
 
   @Get('/sources')
   async sources_(@Ctx() ctx: Context): Promise<unknown> {
@@ -122,15 +122,10 @@ export class ContentController {
     return envelope(ctx, data, { count: data.pages.length })
   }
 
-  @Post('/assets/prepare')
-  async prepare(
-    @Ctx() ctx: Context,
-    @Body() body: { items?: Array<{ provider: string; siteId: string; url: string }> },
-  ): Promise<unknown> {
+  @Post('/images/resolve')
+  async image(@Ctx() ctx: Context, @Body() body: ImageRef): Promise<unknown> {
     requireScope(ctx, 'content')
-    const items = body?.items
-    if (!Array.isArray(items) || items.length === 0) throw badRequest('items is required')
-    const data = this.assets.prepare(items)
-    return envelope(ctx, { assets: data })
+    ctx.set('Cache-Control', 'no-store')
+    return envelope(ctx, await this.images.resolve(body, abortOnClose(ctx)))
   }
 }

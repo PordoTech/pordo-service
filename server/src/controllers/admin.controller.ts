@@ -7,9 +7,8 @@ import { prisma } from '../shared/prisma'
 import { SourceService } from '../modules/sources/application/source.service'
 import { TokenService } from '../modules/tokens/application/token.service'
 import { ComicService } from '../modules/comics/application/comic.service'
-import { AssetService } from '../modules/assets/application/asset.service'
+import { ImageService, type ImageRef } from '../modules/images/application/image.service'
 import { JobService } from '../modules/jobs/application/job.service'
-import { ImageCache } from '../modules/assets/infrastructure/image-cache'
 
 @Service()
 @Controller('/api/admin/v1')
@@ -17,14 +16,13 @@ export class AdminController {
   private sources = Container.get(SourceService)
   private tokens = Container.get(TokenService)
   private comics = Container.get(ComicService)
-  private assets = Container.get(AssetService)
+  private images = Container.get(ImageService)
   private jobs = Container.get(JobService)
-  private cache = Container.get(ImageCache)
 
   @Get('/overview')
   async overview(@Ctx() ctx: Context): Promise<unknown> {
     const since = new Date(Date.now() - 24 * 3600 * 1000)
-    const [failedRequests, totalRequests, tokenCount, comicCount, runningJobs, cacheStats, mem] =
+    const [failedRequests, totalRequests, tokenCount, comicCount, runningJobs, mem] =
       await Promise.all([
         prisma.requestLog.count({
           where: { createdAt: { gte: since }, OR: [{ errorCode: { not: null } }, { status: { gte: 400 } }] },
@@ -33,7 +31,6 @@ export class AdminController {
         prisma.apiToken.count({ where: { revokedAt: null } }),
         prisma.comicRef.count(),
         prisma.job.count({ where: { status: { in: ['pending', 'running'] } } }),
-        this.cache.stats(),
         Promise.resolve(process.memoryUsage()),
       ])
     const sourceList = await this.sources.listAdmin()
@@ -54,7 +51,6 @@ export class AdminController {
       activeTokens: tokenCount,
       resolvedComics: comicCount,
       runningJobs,
-      cache: cacheStats,
     })
   }
 
@@ -195,12 +191,11 @@ export class AdminController {
     })
   }
 
-  /** Stream an asset under the admin session for browser-based verification. */
-  @Get('/assets/:assetId')
-  async testImage(@Ctx() ctx: Context, @Param('assetId') assetId: string): Promise<Context> {
-    await this.assets.serve(ctx, assetId, ctx.state.requestId ?? '')
-    // Returning ctx short-circuits routing-controllers' undefined-result 404.
-    return ctx
+  /** Resolve image request metadata for verification in native clients. */
+  @Post('/test/image')
+  async image(@Ctx() ctx: Context, @Body() body: ImageRef): Promise<unknown> {
+    ctx.set('Cache-Control', 'no-store')
+    return envelope(ctx, await this.images.resolve(body))
   }
 
   @Get('/jobs')
@@ -243,30 +238,6 @@ export class AdminController {
       },
       { count: rows.length },
     )
-  }
-
-  @Get('/cache')
-  async cacheInfo(@Ctx() ctx: Context): Promise<unknown> {
-    const [settings, stats] = await Promise.all([this.cache.settings(), this.cache.stats()])
-    return envelope(ctx, { settings, stats })
-  }
-
-  @Put('/cache')
-  async cacheSettings(
-    @Ctx() ctx: Context,
-    @Body() body: { maxBytes?: number; ttlSeconds?: number },
-  ): Promise<unknown> {
-    const settings = await this.cache.updateSettings({
-      ...(typeof body?.maxBytes === 'number' ? { maxBytes: body.maxBytes } : {}),
-      ...(typeof body?.ttlSeconds === 'number' ? { ttlSeconds: body.ttlSeconds } : {}),
-    })
-    return envelope(ctx, { settings, stats: await this.cache.stats() })
-  }
-
-  @Post('/cache/clear')
-  async cacheClear(@Ctx() ctx: Context, @Body() body: { sourceId?: string }): Promise<unknown> {
-    const removed = await this.cache.clear(body?.sourceId || undefined)
-    return envelope(ctx, { removed, stats: await this.cache.stats() })
   }
 
   @Get('/tokens')

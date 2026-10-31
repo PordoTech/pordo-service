@@ -1,5 +1,13 @@
 # pordo-service 实施方案（已批准）
 
+> 后续用户要求已修订图片链路，以下图片转发、磁盘缓存和 assetId 的历史方案均由本段取代：
+> service 只解析第三方图片访问地址；`POST /api/v1/images/resolve` 接收 provider/siteId/url，
+> 返回 `{url, headers, expiresAt}`。图片字节与图片缓存仅在客户端，不提供图片中继或缓存管理页。
+> Komiic 账号密码与 Cookie 留在服务端，只下发短期图片专用票据；403 由客户端重取一次。
+> service 限制票据解析并发，各客户端按图片策略限制下载并发，跨设备传输不再由 service 调度。
+> 管理端用 `/api/admin/v1/test/image` 查看地址及必要请求头；浏览器不能伪造部分防盗链头，
+> 受保护图片用原生客户端验证。旧数据库缓存表仅为无损升级保留，新代码不再读写。
+
 > 本文档保存用户已确认的方案与实施清单，作为开发依据。参考架构：FlashNext
 > （/Volumes/DevData/Projects/mem/flashnext，只读）。客户端：Pordo
 > （/Volumes/DevData/Projects/player/replayer，远端 PordoTech/pordo）。

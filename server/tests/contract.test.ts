@@ -113,7 +113,6 @@ const admin = (): Record<string, string> => ({
 })
 
 let comicId = ''
-let assetId = ''
 let pageUrl = ''
 
 const extractCookie = (response: Response): string =>
@@ -300,10 +299,9 @@ describe('openapi contract', () => {
       { headers: auth() },
     )
     const pageData = pages.data as {
-      pages: Array<{ url: string; assetId: string }>
+      pages: Array<{ url: string }>
     }
     pageUrl = pageData.pages[0]!.url
-    assetId = pageData.pages[0]!.assetId
     // Identity urls stay upstream-original (never /api/v1/assets proxy URLs);
     // with the mocked baseUrl they point at the mock's /api/image/{kid}.
     assert.ok(pageUrl.includes('/api/image/'), `unexpected page url: ${pageUrl}`)
@@ -311,38 +309,15 @@ describe('openapi contract', () => {
     assert.ok(!pageUrl.includes(server.baseUrl), 'page urls must not point at this service')
   })
 
-  test('assets: prepare, binary streaming and X-Cache', async () => {
-    const prepared = await expectJson(
-      `${server.baseUrl}/api/v1/assets/prepare`,
-      200,
-      'POST',
-      '/api/v1/assets/prepare',
-      {
-        method: 'POST',
-        headers: { ...auth(), 'content-type': 'application/json' },
-        body: JSON.stringify({
-          items: [{ provider: 'komiic', siteId: 'komiic', url: pageUrl }],
-        }),
-      },
-    )
-    const assets = prepared.data as { assets: Array<{ assetId: string }> }
-    assert.equal(assets.assets[0]!.assetId, assetId, 'asset ids are deterministic')
-
-    const first = await fetch(`${server.baseUrl}/api/v1/assets/${assetId}`, {
-      headers: auth(),
+  test('images: direct URL, image-only ticket headers and no-store', async () => {
+    const resolved = await expectJson(`${server.baseUrl}/api/v1/images/resolve`, 200, 'POST', '/api/v1/images/resolve', {
+      method: 'POST', headers: { ...auth(), 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: pageUrl }),
     })
-    assert.equal(first.status, 200)
-    assert.ok(!first.headers.get('content-type')?.includes('application/json'))
-    assert.ok(['HIT', 'MISS'].includes(first.headers.get('x-cache') ?? ''))
-    const bytes = Buffer.from(await first.arrayBuffer())
-    assert.ok(bytes.length > 0)
-
-    const second = await fetch(`${server.baseUrl}/api/v1/assets/${assetId}`, {
-      headers: auth(),
-    })
-    assert.equal(second.status, 200)
-    assert.equal(second.headers.get('x-cache'), 'HIT')
-    await second.arrayBuffer()
+    const data = resolved.data as { url: string; headers: Record<string,string> }
+    assert.ok(data.url.startsWith(mock.base))
+    assert.deepEqual(Object.keys(data.headers), ['x-image-ticket'])
+    assert.equal(mock.images(), 0)
   })
 
   test('updates: job accepted (202) and job view', async () => {
@@ -421,7 +396,7 @@ describe('openapi contract', () => {
     )
   })
 
-  test('admin probes: search, detail, pages and admin asset stream', async () => {
+  test('admin probes: search, detail, pages and direct image metadata', async () => {
     await expectJson(
       `${server.adminBase}/test/search`,
       200,
@@ -460,15 +435,13 @@ describe('openapi contract', () => {
       },
     )
 
-    const stream = await fetch(`${server.adminBase}/assets/${assetId}`, {
-      headers: { cookie },
+    await expectJson(`${server.adminBase}/test/image`, 200, 'POST', '/api/admin/v1/test/image', {
+      method: 'POST', headers: admin(),
+      body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: pageUrl }),
     })
-    assert.equal(stream.status, 200)
-    assert.ok(['HIT', 'MISS'].includes(stream.headers.get('x-cache') ?? ''))
-    await stream.arrayBuffer()
   })
 
-  test('admin ops: overview, jobs, logs and cache', async () => {
+  test('admin ops: overview, jobs and logs', async () => {
     await expectJson(`${server.adminBase}/overview`, 200, 'GET', '/api/admin/v1/overview', {
       headers: { cookie },
     })
@@ -485,25 +458,7 @@ describe('openapi contract', () => {
       '/api/admin/v1/logs',
       { headers: { cookie } },
     )
-    await expectJson(`${server.adminBase}/cache`, 200, 'GET', '/api/admin/v1/cache', {
-      headers: { cookie },
-    })
-    await expectJson(`${server.adminBase}/cache`, 200, 'PUT', '/api/admin/v1/cache', {
-      method: 'PUT',
-      headers: admin(),
-      body: JSON.stringify({ ttlSeconds: 120 }),
-    })
-    await expectJson(
-      `${server.adminBase}/cache/clear`,
-      200,
-      'POST',
-      '/api/admin/v1/cache/clear',
-      {
-        method: 'POST',
-        headers: admin(),
-        body: JSON.stringify({}),
-      },
-    )
+
   })
 
   test('token lifecycle: list, revoke, delete', async () => {
@@ -553,7 +508,7 @@ describe('openapi contract', () => {
     )
   })
 
-  test('error envelopes: auth, CSRF, not-found, bad-request, asset-invalid', async () => {
+  test('error envelopes: auth, CSRF, not-found, bad-request, image-invalid', async () => {
     // Missing bearer token.
     await expectJson(
       `${server.baseUrl}/api/v1/comics/search?q=x`,
@@ -577,19 +532,13 @@ describe('openapi contract', () => {
       '/api/v1/comics/{comicId}',
       { headers: auth() },
     )
-    // Tampered asset id.
-    await expectJson(
-      `${server.baseUrl}/api/v1/assets/eyJwIjoia29taWljIn0.bogus`,
-      403,
-      'GET',
-      '/api/v1/assets/{assetId}',
-      { headers: auth() },
-    )
-    // Admin API without CSRF header.
-    await expectJson(`${server.adminBase}/cache`, 403, 'PUT', '/api/admin/v1/cache', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ ttlSeconds: 120 }),
+    await expectJson(`${server.baseUrl}/api/v1/images/resolve`, 400, 'POST', '/api/v1/images/resolve', {
+      method: 'POST', headers: { ...auth(), 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: 'file:///etc/passwd' }),
+    })
+    await expectJson(`${server.adminBase}/test/image`, 403, 'POST', '/api/admin/v1/test/image', {
+      method: 'POST', headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: pageUrl }),
     })
     // Device tokens cannot call admin APIs.
     await expectJson(`${server.adminBase}/overview`, 401, 'GET', '/api/admin/v1/overview', {

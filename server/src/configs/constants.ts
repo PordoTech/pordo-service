@@ -22,8 +22,6 @@ export const DATABASE_URL =
 process.env.DATABASE_URL = DATABASE_URL
 export const MASTER_KEY_PATH =
   process.env.PORDO_MASTER_KEY_FILE || path.join(DATA_DIR, 'master.key')
-export const IMAGE_CACHE_DIR =
-  process.env.PORDO_IMAGE_CACHE_DIR || path.join(DATA_DIR, 'image-cache')
 export const STATIC_PATH =
   process.env.STATIC_PATH || path.join(__dirname, '..', '..', '..', 'web', 'dist')
 
@@ -40,5 +38,4 @@ export const MAX_CHAPTERS = 10000
 
 export const ensureDataDir = (): void => {
   fs.mkdirSync(DATA_DIR, { recursive: true })
-  fs.mkdirSync(IMAGE_CACHE_DIR, { recursive: true })
 }

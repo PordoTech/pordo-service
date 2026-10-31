@@ -37,8 +37,7 @@ export type ErrorCode =
   // content
   | 'COMIC_NOT_RESOLVED'
   | 'CHAPTER_NOT_FOUND'
-  | 'ASSET_INVALID'
-  | 'ASSET_UNSUPPORTED'
+  | 'IMAGE_UNSUPPORTED'
   | 'NO_RESULTS'
   | 'JOB_NOT_FOUND'
   | 'REQUEST_CANCELLED'

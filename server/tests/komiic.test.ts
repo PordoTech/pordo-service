@@ -46,183 +46,62 @@ const startHarness = async (mode: number): Promise<{ harness: Harness; mock: Kom
 }
 
 describe('komiic provider (offline mock)', () => {
-  test('search, detail, lazy tickets, single refresh and cache', async () => {
+  test('search, detail and lazy image-only tickets; service never fetches images', async () => {
     const { harness, mock, comicId } = await startHarness(0)
     const { server, token } = harness
-    const auth = { authorization: `Bearer ${token}` }
+    const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
     try {
-      // Search
-      const searchResponse = await fetch(
-        `${server.baseUrl}/api/v1/comics/search?q=${encodeURIComponent(' 葬送 ')}&sourceId=komiic`,
-        { headers: auth },
-      )
-      assert.equal(searchResponse.status, 200)
-      const search = (await searchResponse.json()) as {
-        data: {
-          groups: Array<{
-            site: { siteId: string }
-            books: Array<{ comicId: string; title: string; coverAssetId: string | null; detailUrl: string }>
-          }>
-        }
-      }
-      const book = search.data.groups[0]!.books[0]!
-      assert.equal(book.title, '葬送的芙莉莲')
-      assert.equal(book.detailUrl, KOMIIC_DETAIL_URL)
-      assert.equal(book.comicId, comicId)
-      assert.ok(book.coverAssetId)
-
-      // Detail with natural serial ordering and volume kinds
-      const detailResponse = await fetch(`${server.baseUrl}/api/v1/comics/${comicId}`, {
-        headers: auth,
-      })
-      const detail = (await detailResponse.json()) as {
-        data: { comic: { title: string; author: string }; chapters: Array<{ id: string; kind: string }> }
-      }
-      assert.equal(detail.data.comic.author, '作者')
-      assert.deepEqual(
-        detail.data.chapters.map((c) => c.id),
-        ['1', '2', '3', '4', '5'],
-      )
-      assert.equal(detail.data.chapters[4]!.kind, 'volume')
-
-      // Pages: identity URLs are upstream-original, asset ids are access addresses
-      const pagesResponse = await fetch(
-        `${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`,
-        { headers: auth },
-      )
-      const pages = (await pagesResponse.json()) as {
-        data: { pages: Array<{ index: number; url: string; assetId: string }> }
-      }
-      assert.equal(pages.data.pages.length, 1)
-      assert.ok(pages.data.pages[0]!.url.endsWith(`/api/image/${KID}`))
-      assert.equal(mock.tickets(), 0, 'tickets are lazy')
-
-      // First fetch: expired ticket (403) must refresh exactly once
-      const image1 = await fetch(
-        `${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`,
-        { headers: auth },
-      )
-      assert.equal(image1.status, 200)
-      const bytes1 = Buffer.from(await image1.arrayBuffer())
-      assert.ok(bytes1.length > 0)
+      const search = await fetch(`${server.baseUrl}/api/v1/comics/search?q=%E8%91%AC%E9%80%81&sourceId=komiic`, { headers: auth })
+      assert.equal(search.status, 200)
+      const detail = await fetch(`${server.baseUrl}/api/v1/comics/${comicId}`, { headers: auth })
+      const data = (await detail.json()) as { data: { chapters: Array<{ id: string; kind: string }> } }
+      assert.deepEqual(data.data.chapters.map(c => c.id), ['1','2','3','4','5'])
+      assert.equal(data.data.chapters[4]!.kind, 'volume')
+      const pages = await fetch(`${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`, { headers: auth })
+      const page = (await pages.json() as { data: { pages: Array<{ url: string }> } }).data.pages[0]!
+      assert.ok(page.url.endsWith(`/api/image/${KID}`))
+      assert.equal(mock.tickets(), 0)
+      const resolve = () => fetch(`${server.baseUrl}/api/v1/images/resolve`, { method: 'POST', headers: auth,
+        body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: page.url }) })
+      const response = await resolve()
+      assert.equal(response.status, 200)
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+      const access = (await response.json() as { data: { url: string; headers: Record<string,string>; expiresAt: number } }).data
+      assert.ok(access.url.startsWith(mock.base))
+      assert.ok(access.expiresAt > Date.now())
+      assert.deepEqual(Object.keys(access.headers), ['x-image-ticket'])
+      assert.equal(mock.images(), 0)
+      // The device handles 403 by obtaining a new ticket; the server still reads no image bytes.
+      const first = await fetch(access.url, { headers: access.headers }); assert.equal(first.status, 403); await first.arrayBuffer()
+      const refreshed = (await (await resolve()).json() as { data: typeof access }).data
+      const second = await fetch(refreshed.url, { headers: refreshed.headers }); assert.equal(second.status, 200); await second.arrayBuffer()
       assert.equal(mock.tickets(), 2)
-      assert.equal(mock.images(), 2)
-      assert.equal(image1.headers.get('x-cache'), 'MISS')
-      // No ticket may leak into cached bytes
-      assert.ok(!bytes1.includes('ticket-'))
-
-      // Second fetch is a cache hit and needs no upstream calls
-      const image2 = await fetch(
-        `${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`,
-        { headers: auth },
-      )
-      assert.equal(image2.status, 200)
-      assert.equal(image2.headers.get('x-cache'), 'HIT')
-      const bytes2 = Buffer.from(await image2.arrayBuffer())
-      assert.deepEqual(bytes2, bytes1)
-      assert.equal(mock.tickets(), 2)
-      assert.equal(mock.images(), 2)
-
-      // Assets for non-allowlisted komiic hosts are rejected before any fetch
-      const prepare = await fetch(`${server.baseUrl}/api/v1/assets/prepare`, {
-        method: 'POST',
-        headers: { ...auth, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          items: [{ provider: 'komiic', siteId: 'komiic', url: 'https://evil.example/api/image/123' }],
-        }),
-      })
-      const prepared = (await prepare.json()) as { data: { assets: Array<{ assetId: string }> } }
-      const evil = await fetch(
-        `${server.baseUrl}/api/v1/assets/${prepared.data.assets[0]!.assetId}`,
-        { headers: auth },
-      )
+      const evil = await fetch(`${server.baseUrl}/api/v1/images/resolve`, { method: 'POST', headers: auth,
+        body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url: 'https://evil.example/api/image/123' }) })
       assert.equal(evil.status, 400)
-      const evilBody = (await evil.json()) as { error: { message: string } }
-      assert.ok(evilBody.error.message.includes('Komiic'))
-    } finally {
-      await mock.close()
-      await server.stop()
-    }
+    } finally { await mock.close(); await server.stop() }
   })
 
-  test('always-403 images refresh the ticket once then fail with 502', async () => {
-    const { harness, mock, comicId } = await startHarness(1)
+  test('ticket quota blocks resolution but leaves metadata available', async () => {
+    const { harness, mock, comicId } = await startHarness(3)
     const { server, token } = harness
-    const auth = { authorization: `Bearer ${token}` }
+    const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
     try {
-      const pagesResponse = await fetch(
-        `${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`,
-        { headers: auth },
-      )
-      const pages = (await pagesResponse.json()) as {
-        data: { pages: Array<{ assetId: string }> }
+      const pages = await fetch(`${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`, { headers: auth })
+      assert.equal(pages.status, 200)
+      const url = (await pages.json() as { data: { pages: Array<{ url: string }> } }).data.pages[0]!.url
+      for (let i = 0; i < 2; i++) {
+        const response = await fetch(`${server.baseUrl}/api/v1/images/resolve`, { method: 'POST', headers: auth,
+          body: JSON.stringify({ provider: 'komiic', siteId: 'komiic', url }) })
+        assert.equal(response.status, 429)
+        assert.equal((await response.json() as { error: { code: string } }).error.code, 'UPSTREAM_QUOTA')
       }
-      const image = await fetch(
-        `${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`,
-        { headers: auth },
-      )
-      assert.equal(image.status, 502)
-      const body = (await image.json()) as { error: { code: string; message: string } }
-      assert.ok(body.error.message.includes('403'))
-      assert.equal(mock.tickets(), 2, 'exactly one ticket refresh')
-      assert.equal(mock.images(), 2)
-    } finally {
-      await mock.close()
-      await server.stop()
-    }
+      assert.equal(mock.tickets(), 1)
+      assert.equal(mock.images(), 0)
+      const search = await fetch(`${server.baseUrl}/api/v1/comics/search?q=%E8%91%AC%E9%80%81&sourceId=komiic`, { headers: auth })
+      assert.equal(search.status, 200)
+    } finally { await mock.close(); await server.stop() }
   })
-
-  for (const mode of [2, 3]) {
-    test(`quota mode ${mode}: 402/QUOTA_EXCEEDED blocks images but keeps search`, async () => {
-      const { harness, mock, comicId } = await startHarness(mode)
-      const { server, token } = harness
-      const auth = { authorization: `Bearer ${token}` }
-      try {
-        const pagesResponse = await fetch(
-          `${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`,
-          { headers: auth },
-        )
-        // Page list stays usable even when the image quota is exhausted
-        assert.equal(pagesResponse.status, 200)
-        const pages = (await pagesResponse.json()) as {
-          data: { pages: Array<{ assetId: string }> }
-        }
-        const image = await fetch(
-          `${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`,
-          { headers: auth },
-        )
-        assert.equal(image.status, 429)
-        const body = (await image.json()) as {
-          error: { code: string; message: string; retryable: boolean; retryAfter?: number }
-          requestId: string
-        }
-        assert.equal(body.error.code, 'UPSTREAM_QUOTA')
-        assert.equal(body.error.retryable, true)
-        assert.ok(!body.error.message.includes('private info'), 'upstream detail must not leak')
-        assert.ok(body.requestId)
-        // Following image requests are blocked without new tickets
-        const next = await fetch(
-          `${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`,
-          { headers: auth },
-        )
-        assert.equal(next.status, 429)
-        assert.equal(mock.tickets(), 1)
-        // Search keeps working while quota-blocked
-        const search = await fetch(
-          `${server.baseUrl}/api/v1/comics/search?q=${encodeURIComponent('葬送')}&sourceId=komiic`,
-          { headers: auth },
-        )
-        assert.equal(search.status, 200)
-        const searchBody = (await search.json()) as {
-          data: { groups: Array<{ books: unknown[] }> }
-        }
-        assert.equal(searchBody.data.groups[0]!.books.length, 1)
-      } finally {
-        await mock.close()
-        await server.stop()
-      }
-    })
-  }
 
   test('account login, single-flight, refresh fallback and logout', async () => {
     const { harness, mock } = await startHarness(0)
@@ -406,19 +285,4 @@ describe('komiic provider (offline mock)', () => {
     }
   })
 
-  test('invalid asset ids and cross-provider hosts are rejected', async () => {
-    const { harness } = await startHarness(0)
-    const { server, token } = harness
-    const auth = { authorization: `Bearer ${token}` }
-    try {
-      const tampered = await fetch(`${server.baseUrl}/api/v1/assets/eyJwIjoia29taWljIn0.bogus`, {
-        headers: auth,
-      })
-      assert.equal(tampered.status, 403)
-      const body = (await tampered.json()) as { error: { code: string } }
-      assert.equal(body.error.code, 'ASSET_INVALID')
-    } finally {
-      await harness.server.stop()
-    }
-  })
 })

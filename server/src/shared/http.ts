@@ -170,14 +170,14 @@ export const httpUrl = (url: string): URL => {
   try {
     parsed = new URL(url)
   } catch {
-    throw new ApiError(400, 'ASSET_UNSUPPORTED', 'Invalid image URL')
+    throw new ApiError(400, 'IMAGE_UNSUPPORTED', 'Invalid image URL')
   }
   if (
     (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
     parsed.username !== '' ||
     parsed.password !== ''
   ) {
-    throw new ApiError(400, 'ASSET_UNSUPPORTED', 'Unsupported image URL')
+    throw new ApiError(400, 'IMAGE_UNSUPPORTED', 'Unsupported image URL')
   }
   return parsed
 }

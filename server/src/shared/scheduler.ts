@@ -1,8 +1,4 @@
-/**
- * Single-process scheduler: per-context concurrency limits plus in-flight
- * deduplication, so all devices share upstream quotas and identical image
- * requests are never fetched twice at the same time.
- */
+/** Single-process concurrency limits for source metadata and image-ticket resolution. */
 export class Semaphore {
   private queue: Array<() => void> = []
   private active = 0

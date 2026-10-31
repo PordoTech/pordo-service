@@ -2,8 +2,6 @@ import { Service } from 'typedi'
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError, badRequest } from '../../../shared/errors'
 import {
-  headerValue,
-  hostMatches,
   httpUrl,
   readJsonLimited,
   sendUpstream,
@@ -18,7 +16,7 @@ import type {
   ProviderContext,
   SearchGroup,
   Site,
-  UpstreamImage,
+  ImageAccess,
 } from '../types'
 import * as dm5 from '../dm5'
 
@@ -264,103 +262,23 @@ export class MangaYunProvider {
     return pages
   }
 
-  private static readonly PROTECTED_DOMAINS = [
-    'hamreus.com',
-    'cdndm5.com',
-    'ccavbox.com',
-    'bgm.tv',
-    'tuku.cc',
-  ]
-
-  /**
-   * Fetch original image bytes. Matches the public web client: only
-   * hotlink-protected sources need the relay initially; other CDNs are faster
-   * directly, with a relay fallback if the CDN rejects us. DM5 lazy page
-   * endpoints are resolved on demand (once) before fetching.
-   */
-  async fetchImage(url: string, ctx: ProviderContext): Promise<UpstreamImage> {
-    const base = this.base(ctx)
-    const siteId = ctx.siteId ?? ''
-    let absolute = new URL(url, base)
-    httpUrl(absolute.toString())
-
-    if (siteId === 'dm5' && dm5.isPage(absolute)) {
+  /** Resolve DM5 lazy metadata; never probe or download an image on the server. */
+  async imageAccess(url: string, ctx: ProviderContext): Promise<ImageAccess> {
+    const absolute = httpUrl(new URL(url, this.base(ctx)).toString())
+    if (ctx.siteId === 'dm5' && dm5.isPage(absolute)) {
       const resolved = await dm5.resolve(absolute, {
-        proxy: ctx.proxy ?? null,
-        timeoutMs: ctx.timeoutMs,
-        signal: ctx.signal,
+        proxy: ctx.proxy ?? null, timeoutMs: ctx.timeoutMs, signal: ctx.signal,
       })
-      const direct = await this.tryDirect(resolved.image, resolved.referer.toString(), ctx)
-      if (direct) return direct
-      return this.relay(resolved.image.toString(), siteId, ctx, resolved.referer.toString())
+      return { url: resolved.image.toString(), headers: {
+        referer: resolved.referer.toString(), 'user-agent': 'Mozilla/5.0',
+      }, expiresAt: null }
     }
-
-    const protectedSource =
-      hostMatches(absolute.hostname, MangaYunProvider.PROTECTED_DOMAINS) ||
-      ['manhuagui', 'comicbox', 'manben', 'dm5', 'tuku'].includes(siteId)
-    if (protectedSource) {
-      return this.relay(absolute.toString(), siteId, ctx)
+    // Supply native clients the site's hotlink referer without relying on a relay.
+    const referers: Record<string, string> = {
+      dm5: 'https://www.dm5.com/', manhuagui: 'https://www.manhuagui.com/',
+      manben: 'https://www.manben.com/', tuku: 'https://www.tuku.cc/',
     }
-    const direct = await this.tryDirect(absolute, null, ctx)
-    if (direct) return direct
-    return this.relay(absolute.toString(), siteId, ctx)
-  }
-
-  private async tryDirect(
-    image: URL,
-    referer: string | null,
-    ctx: ProviderContext,
-  ): Promise<UpstreamImage | null> {
-    try {
-      const response = await sendUpstream({
-        url: image.toString(),
-        headers: referer ? { referer, 'user-agent': 'Mozilla/5.0' } : undefined,
-        proxy: ctx.proxy ?? null,
-        timeoutMs: ctx.timeoutMs,
-        signal: ctx.signal,
-      })
-      if (response.status !== 200) {
-        response.body.destroy()
-        return null
-      }
-      return {
-        body: response.body,
-        contentType: headerValue(response.headers, 'content-type') || 'image/jpeg',
-      }
-    } catch (error) {
-      if (error instanceof ApiError && error.code === 'REQUEST_CANCELLED') throw error
-      return null
-    }
-  }
-
-  private async relay(
-    url: string,
-    siteId: string,
-    ctx: ProviderContext,
-    referer?: string,
-  ): Promise<UpstreamImage> {
-    const relayUrl = new URL(`${this.base(ctx)}/api/image`)
-    relayUrl.searchParams.set('url', url)
-    relayUrl.searchParams.set('siteId', siteId)
-    const response = await sendUpstream({
-      url: relayUrl.toString(),
-      headers: referer ? { referer } : undefined,
-      proxy: ctx.proxy ?? null,
-      timeoutMs: ctx.timeoutMs,
-      signal: ctx.signal,
-    })
-    if (response.status !== 200) {
-      response.body.destroy()
-      throw new ApiError(
-        502,
-        'UPSTREAM_HTTP',
-        `漫画源 HTTP ${response.status} / Comic source unavailable`,
-        response.status >= 500,
-      )
-    }
-    return {
-      body: response.body,
-      contentType: headerValue(response.headers, 'content-type') || 'image/jpeg',
-    }
+    const referer = referers[ctx.siteId ?? '']
+    return { url: absolute.toString(), headers: referer ? { referer, 'user-agent': 'Mozilla/5.0' } : {}, expiresAt: null }
   }
 }

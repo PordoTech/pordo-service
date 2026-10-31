@@ -107,6 +107,7 @@ model RequestLog {
   @@index([kind, sourceId])
 }
 
+// Legacy tables retained for non-destructive upgrades. No runtime reads/writes.
 model CacheEntry {
   id          String    @id // sha256(sourceId + NUL + contextId + NUL + url)
   path        String // relative to image cache directory
@@ -123,6 +124,7 @@ model CacheEntry {
   @@index([sourceId])
 }
 
+// Legacy settings; image bytes now belong exclusively to clients.
 model CacheSetting {
   id         String   @id @default("default")
   maxBytes   Int      @default(1073741824) // 1 GiB disk cap (SQLite INT max is 2 GiB - 1)

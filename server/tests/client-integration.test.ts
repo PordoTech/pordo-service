@@ -1,52 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { setTimeout as delay } from 'node:timers/promises'
-import { startMock, startTestServer, sendJson, sha256 } from './helpers'
+import { startMock, startTestServer, sha256 } from './helpers'
 import { startKomiicMock, KOMIIC_DETAIL_URL } from './mocks/komiic'
 import { startMangayunMock, DETAIL_URL, SITE_A } from './mocks/mangayun'
 
-// A payload larger than stream highWaterMark catches accidental response-stream sharing.
-test('concurrent devices receive complete independent image streams from one cache fill', async () => {
+test('multiple devices resolve metadata without fetching or caching any image bytes', async () => {
   let calls = 0
-  const bytes = Buffer.alloc(256 * 1024, 57)
-  const upstream = await startMock((_req, res) => {
-    calls += 1
-    res.writeHead(200, { 'content-type': 'image/png' })
-    void (async () => {
-      for (let i = 0; i < bytes.length; i += 8192) {
-        if (res.destroyed) return
-        res.write(bytes.subarray(i, i + 8192))
-        await delay(2)
-      }
-      res.end()
-    })()
-  })
+  const upstream = await startMock((_req, res) => { calls += 1; res.end('image') })
   const server = await startTestServer()
   try {
     const { cookie, csrf } = await server.setupAdmin()
     const tokens = await Promise.all(['device-a', 'device-b'].map(name => server.createDeviceToken(name, cookie, csrf)))
-    const prepared = await fetch(`${server.baseUrl}/api/v1/assets/prepare`, { method: 'POST',
-      headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ items: [{ provider: 'mangayun', siteId: 'site-a', url: `${upstream.base}/image.png` }] }) })
-    assert.equal(prepared.status, 200)
-    const body = await prepared.json() as { data: { assets: Array<{ assetId: string }> } }
-    const asset = body.data.assets[0]!.assetId
-    const results = await Promise.all(Array.from({ length: 5 }, async (_, i) => {
-      const response = await fetch(`${server.baseUrl}/api/v1/assets/${asset}`, { headers: { authorization: `Bearer ${tokens[i % 2]}` } })
+    const url = `${upstream.base}/image.png`
+    for (const token of tokens) {
+      const response = await fetch(`${server.baseUrl}/api/v1/images/resolve`, { method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mangayun', siteId: 'site-a', url }) })
       assert.equal(response.status, 200)
-      return Buffer.from(await response.arrayBuffer())
-    }))
-    for (const result of results) assert.deepEqual(result, bytes)
-    assert.equal(calls, 1, 'all consumers share the cache fill, not the response stream')
-    // Closing the first response must not break another device's copy.
-    const other = `${upstream.base}/cancelled-reader.png`
-    const prepared2 = await fetch(`${server.baseUrl}/api/v1/assets/prepare`, { method: 'POST', headers: { authorization: `Bearer ${tokens[0]}`, 'content-type': 'application/json' }, body: JSON.stringify({ items: [{ provider: 'mangayun', siteId: 'site-a', url: other }] }) })
-    const otherId = ((await prepared2.json()) as typeof body).data.assets[0]!.assetId
-    const first = await fetch(`${server.baseUrl}/api/v1/assets/${otherId}`, { headers: { authorization: `Bearer ${tokens[0]}` } })
-    await first.body!.cancel()
-    const second = await fetch(`${server.baseUrl}/api/v1/assets/${otherId}`, { headers: { authorization: `Bearer ${tokens[1]}` } })
-    assert.deepEqual(Buffer.from(await second.arrayBuffer()), bytes)
-    assert.equal(calls, 2)
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+      assert.deepEqual((await response.json() as { data: unknown }).data, { url, headers: {}, expiresAt: null })
+    }
+    assert.equal(calls, 0, 'service never requests an image body')
+    const fs = await import('node:fs')
+    assert.equal(fs.existsSync(`${server.dataDir}/image-cache`), false)
+    const removed = await fetch(`${server.baseUrl}/api/v1/assets/old-id`, { headers: { authorization: `Bearer ${tokens[0]}` } })
+    assert.equal(removed.status, 404)
   } finally { await upstream.close(); await server.stop() }
 })
 

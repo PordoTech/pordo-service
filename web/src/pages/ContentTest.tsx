@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { api, assetUrl, errorText } from '../api'
+import { api, errorText } from '../api'
 import type {
   ChapterView,
   ComicView,
   ImagePolicy,
+  ImageAccess,
   PageView,
   SearchGroup,
   SourceAdminView,
@@ -97,7 +98,6 @@ export default function ContentTest(): ReactNode {
       status: '',
       coverUrl: '',
       detailUrl: url,
-      coverAssetId: null,
     })
   }
 
@@ -182,9 +182,9 @@ export default function ContentTest(): ReactNode {
                       onClick={() => void openDetail(book)}
                       className="rounded-lg border border-slate-200 bg-white p-2 text-left transition-shadow hover:shadow-md"
                     >
-                      {book.coverAssetId ? (
+                      {book.coverUrl ? (
                         <img
-                          src={assetUrl(book.coverAssetId)}
+                          src={book.coverUrl}
                           alt={book.title}
                           loading="lazy"
                           className="mb-2 aspect-[3/4] w-full rounded object-cover"
@@ -215,9 +215,9 @@ export default function ContentTest(): ReactNode {
           }
         >
           <div className="grid gap-4 md:grid-cols-[160px_1fr]">
-            {detail.comic.coverAssetId && (
+            {detail.comic.coverUrl && (
               <img
-                src={assetUrl(detail.comic.coverAssetId)}
+                src={detail.comic.coverUrl}
                 alt={detail.comic.title}
                 className="w-40 rounded-lg object-cover"
               />
@@ -272,16 +272,9 @@ export default function ContentTest(): ReactNode {
           </p>
           <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
             {pages.pages.map((page) => (
-              <figure key={page.assetId} className="space-y-1">
-                <img
-                  src={assetUrl(page.assetId)}
-                  alt={`第 ${page.index + 1} 页`}
-                  loading="lazy"
-                  className="aspect-[2/3] w-full rounded-lg border border-slate-200 object-cover"
-                />
-                <figcaption className="text-center text-[10px] text-slate-400">
-                  #{page.index + 1}
-                </figcaption>
+              <figure key={page.url} className="space-y-1">
+                <ImageProbe provider={detail?.comic.provider ?? sourceId} siteId={detail?.comic.siteId ?? sourceId} url={page.url} />
+                <figcaption className="text-center text-[10px] text-slate-400">#{page.index + 1}</figcaption>
               </figure>
             ))}
           </div>
@@ -289,4 +282,30 @@ export default function ContentTest(): ReactNode {
       )}
     </div>
   )
+}
+
+/** Browser restrictions never cause images to be relayed through this service. */
+function ImageProbe({ provider, siteId, url }: { provider: string; siteId: string; url: string }): ReactNode {
+  const [access, setAccess] = useState<ImageAccess | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const resolve = async (): Promise<void> => {
+    setBusy(true); setError('')
+    try {
+      setAccess(await api<ImageAccess>('/api/admin/v1/test/image', {
+        method: 'POST', body: JSON.stringify({ provider, siteId, url }),
+      }))
+    } catch (cause) { setError(errorText(cause)) } finally { setBusy(false) }
+  }
+  return <div className="space-y-2 break-all text-xs">
+    <Button disabled={busy} onClick={() => void resolve()}>{busy ? '解析中' : '解析图片地址'}</Button>
+    {error && <ErrorNote error={error} />}
+    {access && <>
+      <a href={access.url} target="_blank" rel="noreferrer" className="text-indigo-600 underline">第三方图片链接</a>
+      {Object.keys(access.headers).length === 0
+        ? <img src={access.url} alt="第三方图片预览" loading="lazy" referrerPolicy="no-referrer" className="w-full rounded" />
+        : <p className="text-slate-500">需要下方请求头，请用原生客户端取图；浏览器直接打开可能失败。</p>}
+      <details><summary>请求信息</summary><pre className="whitespace-pre-wrap">{JSON.stringify(access, null, 2)}</pre></details>
+    </>}
+  </div>
 }

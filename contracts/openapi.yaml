@@ -12,9 +12,7 @@ info:
     - `comicId` is the content identity: `sha256(provider \0 siteId \0 detailUrl)`
       (hex), identical to the client's `Book.key`. It is stable across restarts
       and deployments.
-    - `assetId` is an access address (HMAC-signed provider/siteId/url triple),
-      never persisted as content identity. `detailUrl`/`coverUrl`/page `url`
-      always carry original upstream values, never proxy URLs.
+    - Image bytes are requested directly from third parties by the client.
     - Device clients authenticate with `Authorization: Bearer pt_...` tokens.
       Admin APIs use the `pordo_admin` session cookie plus `x-csrf-token`.
       Device tokens cannot call admin APIs and vice versa.
@@ -28,8 +26,8 @@ security: []
 tags:
   - name: content
     description: Device-facing content API (Bearer device token)
-  - name: assets
-    description: Signed asset streaming and preparation
+  - name: images
+    description: Direct third-party image access metadata
   - name: admin-auth
     description: Admin bootstrap, session and CSRF
   - name: admin
@@ -249,7 +247,7 @@ paths:
     get:
       tags: [content]
       operationId: getPages
-      summary: Page list; urls are upstream originals, assetIds are access addresses
+      summary: Page list with original upstream identities; resolve image access on demand
       security: [{ bearerAuth: [] }]
       parameters:
         - $ref: '#/components/parameters/ComicId'
@@ -349,11 +347,12 @@ paths:
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
         '404': { $ref: '#/components/responses/ErrorEnvelope' }
 
-  /api/v1/assets/prepare:
+  /api/v1/images/resolve:
     post:
-      tags: [assets]
-      operationId: prepareAssets
-      summary: Sign asset ids for legacy stored original URLs (compatibility)
+      tags: [images]
+      operationId: resolveImage
+      summary: Resolve a third-party image URL and image-only request headers
+      description: Returns metadata only. Clients download image bytes directly. No service proxy or image cache. Account cookies and passwords are never returned.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -361,22 +360,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [items]
+              required: [provider, siteId, url]
               properties:
-                items:
-                  type: array
-                  minItems: 1
-                  maxItems: 500
-                  items:
-                    type: object
-                    required: [provider, siteId, url]
-                    properties:
-                      provider: { type: string }
-                      siteId: { type: string }
-                      url: { type: string }
+                provider: { type: string }
+                siteId: { type: string }
+                url: { type: string }
       responses:
         '200':
-          description: Signed asset ids
+          description: Direct image access; short-lived tickets must not be persisted
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
           content:
             application/json:
               schema:
@@ -384,60 +377,11 @@ paths:
                   - $ref: '#/components/schemas/SuccessEnvelope'
                   - type: object
                     properties:
-                      data:
-                        type: object
-                        required: [assets]
-                        properties:
-                          assets:
-                            type: array
-                            items:
-                              type: object
-                              required: [provider, siteId, url, assetId]
-                              properties:
-                                provider: { type: string }
-                                siteId: { type: string }
-                                url: { type: string }
-                                assetId: { type: string }
-        '400': { $ref: '#/components/responses/ErrorEnvelope' }
-        '401': { $ref: '#/components/responses/ErrorEnvelope' }
-        '404': { $ref: '#/components/responses/ErrorEnvelope' }
-
-  /api/v1/assets/{assetId}:
-    get:
-      tags: [assets]
-      operationId: getAsset
-      summary: Stream real image bytes (never a JSON envelope on success)
-      description: |
-        There is no open URL proxy: asset ids are HMAC-signed
-        (provider, siteId, url) triples validated per provider, and private
-        destinations are blocked in production. Cache status is exposed via
-        `X-Cache` (HIT/MISS). Tickets and cookies never leave the service.
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - name: assetId
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200':
-          description: Image bytes
-          headers:
-            X-Cache:
-              schema: { type: string, enum: [HIT, MISS] }
-            Cache-Control:
-              schema: { type: string }
-          content:
-            image/jpeg:
-              schema: { type: string, format: binary }
-            image/png:
-              schema: { type: string, format: binary }
-            image/webp:
-              schema: { type: string, format: binary }
-            application/octet-stream:
-              schema: { type: string, format: binary }
+                      data: { $ref: '#/components/schemas/ImageAccess' }
         '400': { $ref: '#/components/responses/ErrorEnvelope' }
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
         '403': { $ref: '#/components/responses/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/ErrorEnvelope' }
         '429': { $ref: '#/components/responses/ErrorEnvelope' }
         '502': { $ref: '#/components/responses/ErrorEnvelope' }
 
@@ -620,7 +564,7 @@ paths:
     get:
       tags: [admin]
       operationId: overview
-      summary: Dashboard counters (requests, tokens, cache, jobs, memory)
+      summary: Dashboard counters (requests, tokens, jobs, memory)
       security: [{ adminCookie: [] }]
       responses:
         '200':
@@ -643,7 +587,6 @@ paths:
                           - activeTokens
                           - resolvedComics
                           - runningJobs
-                          - cache
                         properties:
                           uptimeSeconds: { type: integer }
                           rssBytes: { type: integer }
@@ -673,7 +616,6 @@ paths:
                           activeTokens: { type: integer }
                           resolvedComics: { type: integer }
                           runningJobs: { type: integer }
-                          cache: { $ref: '#/components/schemas/CacheStats' }
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
 
   /api/admin/v1/sources:
@@ -1013,28 +955,41 @@ paths:
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
         '403': { $ref: '#/components/responses/ErrorEnvelope' }
 
-  /api/admin/v1/assets/{assetId}:
-    get:
+  /api/admin/v1/test/image:
+    post:
       tags: [admin]
-      operationId: adminGetAsset
-      summary: Stream an asset under the admin session (browser verification)
-      security: [{ adminCookie: [] }]
-      parameters:
-        - name: assetId
-          in: path
-          required: true
-          schema: { type: string }
+      operationId: adminResolveImage
+      summary: Resolve a third-party image URL and image-only request headers
+      description: Returns metadata only. Clients download image bytes directly. No service proxy or image cache. Account cookies and passwords are never returned.
+      security: [{ adminCookie: [], csrfToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, siteId, url]
+              properties:
+                provider: { type: string }
+                siteId: { type: string }
+                url: { type: string }
       responses:
         '200':
-          description: Image bytes
+          description: Direct image access; short-lived tickets must not be persisted
           headers:
-            X-Cache:
-              schema: { type: string, enum: [HIT, MISS] }
+            Cache-Control: { schema: { type: string, const: no-store } }
           content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ImageAccess' }
+        '400': { $ref: '#/components/responses/ErrorEnvelope' }
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
         '403': { $ref: '#/components/responses/ErrorEnvelope' }
+        '404': { $ref: '#/components/responses/ErrorEnvelope' }
         '429': { $ref: '#/components/responses/ErrorEnvelope' }
         '502': { $ref: '#/components/responses/ErrorEnvelope' }
 
@@ -1105,95 +1060,6 @@ paths:
                         properties:
                           count: { type: integer }
         '401': { $ref: '#/components/responses/ErrorEnvelope' }
-
-  /api/admin/v1/cache:
-    get:
-      tags: [admin]
-      operationId: cacheInfo
-      summary: Cache settings and stats
-      security: [{ adminCookie: [] }]
-      responses:
-        '200':
-          description: Cache info
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/SuccessEnvelope'
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        required: [settings, stats]
-                        properties:
-                          settings: { $ref: '#/components/schemas/CacheSettings' }
-                          stats: { $ref: '#/components/schemas/CacheStats' }
-        '401': { $ref: '#/components/responses/ErrorEnvelope' }
-    put:
-      tags: [admin]
-      operationId: updateCache
-      summary: Update cache cap/TTL
-      security: [{ adminCookie: [], csrfToken: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                maxBytes: { type: integer, minimum: 0, maximum: 2147483647 }
-                ttlSeconds: { type: integer, minimum: 60 }
-      responses:
-        '200':
-          description: Updated cache info
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/SuccessEnvelope'
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        required: [settings, stats]
-                        properties:
-                          settings: { $ref: '#/components/schemas/CacheSettings' }
-                          stats: { $ref: '#/components/schemas/CacheStats' }
-        '401': { $ref: '#/components/responses/ErrorEnvelope' }
-        '403': { $ref: '#/components/responses/ErrorEnvelope' }
-
-  /api/admin/v1/cache/clear:
-    post:
-      tags: [admin]
-      operationId: clearCache
-      summary: Clear cached images (optionally per source)
-      security: [{ adminCookie: [], csrfToken: [] }]
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                sourceId: { type: string }
-      responses:
-        '200':
-          description: Removed count
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/SuccessEnvelope'
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        required: [removed, stats]
-                        properties:
-                          removed: { type: integer }
-                          stats: { $ref: '#/components/schemas/CacheStats' }
-        '401': { $ref: '#/components/responses/ErrorEnvelope' }
-        '403': { $ref: '#/components/responses/ErrorEnvelope' }
 
   /api/admin/v1/tokens:
     get:
@@ -1504,7 +1370,6 @@ components:
         - status
         - coverUrl
         - detailUrl
-        - coverAssetId
       properties:
         comicId:
           type: string
@@ -1522,9 +1387,6 @@ components:
         detailUrl:
           type: string
           description: Original upstream URL (identity), never a proxy URL
-        coverAssetId:
-          type: [string, 'null']
-          description: Signed access address for the cover image
 
     ChapterView:
       type: object
@@ -1539,15 +1401,25 @@ components:
 
     PageView:
       type: object
-      required: [index, url, assetId]
+      required: [index, url]
       properties:
         index: { type: integer }
         url:
           type: string
           description: Original upstream URL (identity), never a proxy URL
-        assetId:
-          type: string
-          description: Signed access address used with GET /api/v1/assets/{assetId}
+
+    ImageAccess:
+      type: object
+      required: [url, headers, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        headers:
+          type: object
+          propertyNames: { enum: [referer, origin, user-agent, x-image-ticket] }
+          additionalProperties: { type: string }
+        expiresAt:
+          type: [integer, 'null']
+          description: Unix milliseconds; null when the upstream does not declare expiry
 
     ImagePolicy:
       type: object
@@ -1614,21 +1486,6 @@ components:
         durationMs: { type: integer }
         detail: { type: [string, 'null'] }
         createdAt: { type: string, format: date-time }
-
-    CacheSettings:
-      type: object
-      required: [maxBytes, ttlSeconds]
-      properties:
-        maxBytes: { type: integer, minimum: 0 }
-        ttlSeconds: { type: integer, minimum: 60 }
-
-    CacheStats:
-      type: object
-      required: [entries, bytes, hits]
-      properties:
-        entries: { type: integer }
-        bytes: { type: [integer, 'null'] }
-        hits: { type: [integer, 'null'] }
 
     TokenRecord:
       type: object

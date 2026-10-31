@@ -11,17 +11,6 @@ export interface SessionData {
   session: SessionView | null
 }
 
-export interface CacheStats {
-  entries: number
-  bytes: number | null
-  hits: number | null
-}
-
-export interface CacheSettings {
-  maxBytes: number
-  ttlSeconds: number
-}
-
 export interface AccountState {
   phase: 'guest' | 'pending' | 'signing_in' | 'signed_in' | 'error'
   nickname: string
@@ -75,7 +64,6 @@ export interface OverviewData {
   activeTokens: number
   resolvedComics: number
   runningJobs: number
-  cache: CacheStats
 }
 
 export interface ComicView {
@@ -89,7 +77,6 @@ export interface ComicView {
   status: string
   coverUrl: string
   detailUrl: string
-  coverAssetId: string | null
 }
 
 export interface ChapterView {
@@ -103,7 +90,6 @@ export interface ChapterView {
 export interface PageView {
   index: number
   url: string
-  assetId: string
 }
 
 export interface ImagePolicy {
@@ -165,3 +151,5 @@ export interface TokenRecord {
   lastUsedAt: string | null
   revokedAt: string | null
 }
+
+export interface ImageAccess { url: string; headers: Record<string, string>; expiresAt: number | null }

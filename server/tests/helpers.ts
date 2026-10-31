@@ -8,6 +8,7 @@ import crypto from 'node:crypto'
 export const SERVER_DIR = path.join(__dirname, '..')
 
 export interface TestServer {
+  dataDir: string
   baseUrl: string
   adminBase: string
   /** Creates the admin (first call only) and returns the CSRF token + cookie header. */
@@ -32,7 +33,6 @@ export const startTestServer = async (options: { staticPath?: string; masterKey?
     NODE_ENV: 'test',
     PORDO_DATA_DIR: dir,
     PORDO_MASTER_KEY: options.masterKey ?? 'test-master-key-0123456789abcdef-test',
-    PORDO_IMAGE_CACHE_DIR: path.join(dir, 'image-cache'),
     DATABASE_URL: `file:${dbPath}`,
     PORDO_ALLOW_PRIVATE_UPSTREAMS: '1',
     STATIC_PATH: options.staticPath ?? path.join(dir, 'no-web'),
@@ -135,7 +135,7 @@ export const startTestServer = async (options: { staticPath?: string; masterKey?
     return body.data.token
   }
 
-  return { baseUrl, adminBase: `${baseUrl}/api/admin/v1`, setupAdmin, login, createDeviceToken, stop }
+  return { dataDir: dir, baseUrl, adminBase: `${baseUrl}/api/admin/v1`, setupAdmin, login, createDeviceToken, stop }
 }
 
 export interface MockHandle {

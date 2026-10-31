@@ -68,28 +68,6 @@ export const decryptSecret = (encoded: string): string => {
   ]).toString('utf8')
 }
 
-/** HMAC-signed, deterministic asset ids; unforgeable without the master key. */
-export const signAsset = (payload: string): string => {
-  const mac = crypto
-    .createHmac('sha256', deriveKey(Buffer.alloc(16, 7), 'pordo/asset-id/v1'))
-    .update(payload)
-    .digest()
-    .subarray(0, 16)
-  return `${Buffer.from(payload, 'utf8').toString('base64url')}.${mac.toString('base64url')}`
-}
-
-export const verifyAsset = (signed: string): string | null => {
-  const index = signed.lastIndexOf('.')
-  if (index <= 0) return null
-  const payload = signed.slice(0, index)
-  const expected = signAsset(Buffer.from(payload, 'base64url').toString('utf8'))
-  const a = Buffer.from(expected)
-  const b = Buffer.from(signed)
-  return a.length === b.length && crypto.timingSafeEqual(a, b)
-    ? Buffer.from(payload, 'base64url').toString('utf8')
-    : null
-}
-
 export const hashPassword = async (password: string): Promise<string> => {
   const salt = crypto.randomBytes(16)
   const derived = await new Promise<Buffer>((resolve, reject) => {

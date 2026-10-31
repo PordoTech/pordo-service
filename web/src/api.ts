@@ -58,9 +58,5 @@ export const api = async <T>(path: string, init: RequestInit = {}): Promise<T> =
   return body.data as T
 }
 
-/** Admin-session image stream (works in <img> because the cookie is sent). */
-export const assetUrl = (assetId: string): string =>
-  `/api/admin/v1/assets/${encodeURIComponent(assetId)}`
-
 export const errorText = (error: unknown): string =>
   error instanceof ApiError ? `${error.code} · ${error.message}` : String(error)

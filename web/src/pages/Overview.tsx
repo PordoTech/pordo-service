@@ -42,8 +42,6 @@ export default function Overview(): ReactNode {
         <Stat label="活动令牌" value={data.activeTokens} />
         <Stat label="已解析书籍" value={data.resolvedComics} />
         <Stat label="进行中任务" value={data.runningJobs} />
-        <Stat label="缓存条目" value={data.cache.entries} />
-        <Stat label="缓存占用 / 命中" value={`${formatBytes(data.cache.bytes)} / ${data.cache.hits ?? 0}`} />
       </div>
       <Card title="内容源状态">
         <table className="w-full text-sm">

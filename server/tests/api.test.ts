@@ -1,7 +1,7 @@
 /**
  * API behavior tests that go deeper than the OpenAPI contract checks: the
  * directory update-check job result payload (chapter counts + new-chapter
- * deltas) and bounded-cache eviction under a size cap. Offline against the
+ * deltas) and direct image metadata. Offline against the
  * shared komiic mock.
  */
 import test, { describe } from 'node:test'
@@ -102,54 +102,4 @@ describe('api behavior (offline mock)', () => {
     }
   })
 
-  test('cache cap evicts entries and forces a refetch', async () => {
-    const { server, mock, token, cookie, csrf, comicId } = await startHarness(0)
-    const auth = { authorization: `Bearer ${token}` }
-    const admin = { 'content-type': 'application/json', cookie, 'x-csrf-token': csrf }
-    try {
-      // Warm the cache with one page image.
-      const pages = await fetch(
-        `${server.baseUrl}/api/v1/comics/${comicId}/chapters/1/pages`,
-        { headers: auth },
-      )
-      const pageData = (await pages.json()) as { data: { pages: Array<{ assetId: string }> } }
-      const assetId = pageData.data.pages[0]!.assetId
-
-      const warm = await fetch(`${server.baseUrl}/api/v1/assets/${assetId}`, { headers: auth })
-      assert.equal(warm.status, 200)
-      await warm.arrayBuffer()
-
-      const beforeResponse = await fetch(`${server.adminBase}/cache`, { headers: { cookie } })
-      const before = (await beforeResponse.json()) as {
-        data: { stats: { entries: number; bytes: number } }
-      }
-      assert.ok(before.data.stats.entries >= 1, 'cache warmed')
-      assert.ok(before.data.stats.bytes > 0)
-
-      // Shrink the cap; updateSettings awaits enforceCap so eviction is done
-      // by the time the PUT returns.
-      const shrink = await fetch(`${server.adminBase}/cache`, {
-        method: 'PUT',
-        headers: admin,
-        body: JSON.stringify({ maxBytes: 10 }),
-      })
-      assert.equal(shrink.status, 200)
-
-      const afterResponse = await fetch(`${server.adminBase}/cache`, { headers: { cookie } })
-      const after = (await afterResponse.json()) as {
-        data: { stats: { entries: number; bytes: number } }
-      }
-      assert.equal(after.data.stats.entries, 0, 'entries evicted under the cap')
-      assert.ok(after.data.stats.bytes <= 10)
-
-      // The evicted asset must be fetched from upstream again.
-      const refetch = await fetch(`${server.baseUrl}/api/v1/assets/${assetId}`, { headers: auth })
-      assert.equal(refetch.status, 200)
-      assert.equal(refetch.headers.get('x-cache'), 'MISS')
-      await refetch.arrayBuffer()
-    } finally {
-      await mock.close()
-      await server.stop()
-    }
-  })
 })
