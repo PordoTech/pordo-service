@@ -142,11 +142,10 @@ export const requireScope = (ctx: Context, scope: string): void => {
 
 /**
  * Bounded request log for the content API (admin logs page / overview
- * counters). Query strings are never persisted; asset streams log their own
- * cache hit/miss entries, so they are skipped here.
+ * counters). Query strings and request/response bodies (including image tickets) are never persisted.
  */
 export const apiLogMiddleware: Middleware = async (ctx, next) => {
-  if (!ctx.path.startsWith('/api/v1/') || ctx.path.startsWith('/api/v1/assets/')) {
+  if (!ctx.path.startsWith('/api/v1/')) {
     return next()
   }
   const started = Date.now()

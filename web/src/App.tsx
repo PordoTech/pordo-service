@@ -9,7 +9,6 @@ import Sources from './pages/Sources'
 import ContentTest from './pages/ContentTest'
 import Jobs from './pages/Jobs'
 import Logs from './pages/Logs'
-import Cache from './pages/Cache'
 import Tokens from './pages/Tokens'
 
 const navItems: Array<{ to: string; label: string; end?: boolean }> = [
@@ -18,7 +17,6 @@ const navItems: Array<{ to: string; label: string; end?: boolean }> = [
   { to: '/test', label: '内容测试' },
   { to: '/jobs', label: '任务' },
   { to: '/logs', label: '日志' },
-  { to: '/cache', label: '缓存' },
   { to: '/tokens', label: '设备令牌' },
 ]
 
@@ -116,7 +114,6 @@ export default function App(): ReactNode {
             <Route path="/test" element={<ContentTest />} />
             <Route path="/jobs" element={<Jobs />} />
             <Route path="/logs" element={<Logs />} />
-            <Route path="/cache" element={<Cache />} />
             <Route path="/tokens" element={<Tokens />} />
             <Route path="*" element={<p className="text-sm text-slate-400">页面不存在</p>} />
           </Routes>

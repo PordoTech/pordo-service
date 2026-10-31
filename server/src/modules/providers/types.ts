@@ -1,8 +1,6 @@
-import type { Readable } from 'node:stream'
-
 /**
  * Strongly typed provider contracts. Content identity (provider/siteId/urls)
- * is separated from resource access (asset ids handled by the asset layer).
+ * is separated from direct image access (short-lived URLs and image-only headers).
  * ComicProvider is implemented now; VideoProvider reserves the video surface
  * without inventing sources or transcoding.
  */
@@ -90,11 +88,12 @@ export interface AccountConfigSchemaField {
   placeholder?: string
 }
 
-export interface UpstreamImage {
-  body: Readable
-  contentType: string
-  /** When true the bytes must not be cached beyond this request (e.g. tickets). */
-  status?: number
+/** Image-only access grant. Never includes account cookies or passwords. */
+export interface ImageAccess {
+  url: string
+  headers: Record<string, string>
+  /** Unix milliseconds; null when the upstream does not declare an expiry. */
+  expiresAt: number | null
 }
 
 /** Per-account execution context passed to providers for scheduling/isolation. */
@@ -122,12 +121,8 @@ export interface ComicProvider {
   detail(book: ComicBook, ctx: ProviderContext): Promise<ComicDetail>
   /** Original upstream page URLs (content identity), never proxy URLs. */
   pages(book: ComicBook, chapter: ComicChapter, refresh: boolean, ctx: ProviderContext): Promise<string[]>
-  /**
-   * Fetch original image bytes for an upstream URL (cover or page). Providers
-   * apply their own headers/tickets/relays internally and must validate the
-   * destination host.
-   */
-  fetchImage(url: string, ctx: ProviderContext): Promise<UpstreamImage>
+  /** Resolve access metadata only; image bytes are fetched by the client. */
+  imageAccess(url: string, ctx: ProviderContext): Promise<ImageAccess>
   imagePolicy?(book: ComicBook): ImagePolicy
 }
 
@@ -161,8 +156,7 @@ export interface PlaybackTarget {
   format: string
   /** Milliseconds until the URL stops working; null = stable. */
   expiresAt: number | null
-  /** direct = client may fetch itself; proxy = must go through /assets. */
-  access: 'direct' | 'proxy'
+  access: 'direct'
   url: string
 }
 

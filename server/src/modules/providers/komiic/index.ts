@@ -1,8 +1,6 @@
 import { Service } from 'typedi'
-import type { Readable } from 'node:stream'
 import { ApiError, badRequest } from '../../../shared/errors'
-import { headerValue, httpUrl, readJsonLimited, sendUpstream } from '../../../shared/http'
-import { inFlight, semaphoreFor } from '../../../shared/scheduler'
+import { httpUrl, readJsonLimited, sendUpstream } from '../../../shared/http'
 import type {
   AccountConfigSchemaField,
   AccountState,
@@ -14,9 +12,8 @@ import type {
   ProviderContext,
   SearchGroup,
   Site,
-  UpstreamImage,
+  ImageAccess,
 } from '../types'
-import { defaultImagePolicy } from '../types'
 import { KomiicSession, numberOf, unauthorized, type KomiicCredentials } from './session'
 
 type Json = Record<string, unknown>
@@ -389,11 +386,11 @@ export class KomiicProvider {
     return pages
   }
 
-  /** Resolve an image ticket for a kid; refreshable allows exactly one retry. */
+  /** Resolve a scoped image ticket without fetching the corresponding image. */
   private async ticket(
     ctx: ProviderContext,
     kid: string,
-  ): Promise<{ url: string; headers: Record<string, string> }> {
+  ): Promise<ImageAccess> {
     const base = this.base(ctx)
     const session = this.session(ctx)
     await session.ensureReady(false)
@@ -424,92 +421,28 @@ export class KomiicProvider {
     if (!ticketHeader) {
       throw new ApiError(502, 'UPSTREAM_PROTOCOL', '缺少图片凭证 / Missing image ticket')
     }
-    return { url: url.toString(), headers: { 'x-image-ticket': ticketHeader } }
+    const expires = ticket.expiresAt
+    const numeric = typeof expires === 'number' ? expires : typeof expires === 'string' && /^\d+(\.\d+)?$/.test(expires) ? Number(expires) : NaN
+    const parsedExpiry = Number.isFinite(numeric) ? (numeric < 1e12 ? numeric * 1000 : numeric)
+      : typeof expires === 'string' ? Date.parse(expires) : NaN
+    return { url: url.toString(), headers: { 'x-image-ticket': ticketHeader }, expiresAt: Number.isFinite(parsedExpiry) ? Math.trunc(parsedExpiry) : null }
   }
 
-  /**
-   * Fetch image bytes. Page URLs are `{base}/api/image/{kid}` resolved through
-   * tickets; an expired ticket (403) is refreshed exactly once; 402 blocks the
-   * account quota. Cover images must come from public.komiic.com.
-   */
-  async fetchImage(url: string, ctx: ProviderContext): Promise<UpstreamImage> {
+  /** Resolve a short-lived ticket; only the client requests the image body. */
+  async imageAccess(url: string, ctx: ProviderContext): Promise<ImageAccess> {
     const base = this.base(ctx)
     const parsed = httpUrl(url)
-    const isPage = parsed.origin === new URL(base).origin && parsed.pathname.startsWith('/api/image/')
-    if (isPage) {
+    if (parsed.origin === new URL(base).origin && parsed.pathname.startsWith('/api/image/')) {
       const kid = parsed.pathname.slice('/api/image/'.length)
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(kid)) {
         throw badRequest('无效图片编号 / Invalid image ID')
       }
-      const session = this.session(ctx)
-      const sem = semaphoreFor(`komiic:${ctx.sourceId}:${ctx.contextId}`, 2)
-      return sem.run(
-        () =>
-          inFlight.dedupe(`komiic:${ctx.sourceId}:${ctx.contextId}:${kid}`, () =>
-            this.fetchTicketed(ctx, session, kid),
-          ),
-        ctx.signal,
-      )
+      return this.ticket(ctx, kid)
     }
     if (!(parsed.protocol === 'https:' && parsed.hostname === 'public.komiic.com')) {
       throw badRequest('无效 Komiic 图片地址 / Invalid image URL')
     }
-    const response = await sendUpstream({
-      url,
-      proxy: ctx.proxy ?? null,
-      timeoutMs: ctx.timeoutMs,
-      signal: ctx.signal,
-    })
-    if (response.status !== 200) {
-      response.body.destroy()
-      throw new ApiError(502, 'UPSTREAM_HTTP', `Komiic HTTP ${response.status}`, response.status >= 500)
-    }
-    return {
-      body: response.body,
-      contentType: headerValue(response.headers, 'content-type') || 'image/jpeg',
-    }
-  }
-
-  private async fetchTicketed(
-    ctx: ProviderContext,
-    session: KomiicSession,
-    kid: string,
-  ): Promise<UpstreamImage> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const ticket = await this.ticket(ctx, kid)
-      this.check(ctx, session)
-      const response = await sendUpstream({
-        url: ticket.url,
-        headers: ticket.headers,
-        proxy: ctx.proxy ?? null,
-        timeoutMs: ctx.timeoutMs,
-        signal: ctx.signal,
-      })
-      if (response.status === 200) {
-        return {
-          body: response.body,
-          contentType: headerValue(response.headers, 'content-type') || 'image/jpeg',
-        }
-      }
-      if (response.status === 403 && attempt === 0) {
-        // Expired ticket: refresh exactly once (matches client behavior).
-        response.body.destroy()
-        continue
-      }
-      if (response.status === 402) {
-        response.body.destroy()
-        session.quotaBlock(session.resetSeconds())
-        session.quotaCheck()
-      }
-      response.body.destroy()
-      throw new ApiError(
-        response.status === 403 ? 502 : 502,
-        'UPSTREAM_HTTP',
-        `Komiic HTTP ${response.status} / Source unavailable`,
-        response.status >= 500,
-      )
-    }
-    throw new ApiError(502, 'UPSTREAM_HTTP', 'Komiic 图片获取失败 / Image fetch failed')
+    return { url: parsed.toString(), headers: {}, expiresAt: null }
   }
 
   /** Exposed for tests: force a quota block like the client's quota_block. */

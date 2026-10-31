@@ -6,7 +6,8 @@ import { badRequest } from '../shared/errors'
 import { ComicService } from '../modules/comics/application/comic.service'
 import { JobService, type UpdateEntry } from '../modules/jobs/application/job.service'
 import { SourceService } from '../modules/sources/application/source.service'
-import { AssetService } from '../modules/assets/application/asset.service'
+import { ProviderRegistry } from '../modules/providers/registry'
+import { ImageService, type ImageRef } from '../modules/images/application/image.service'
 import { requireScope } from '../shared/middlewares'
 
 const abortOnClose = (ctx: Context): AbortSignal => {
@@ -23,13 +24,22 @@ export class ContentController {
   private comics = Container.get(ComicService)
   private jobs = Container.get(JobService)
   private sources = Container.get(SourceService)
-  private assets = Container.get(AssetService)
+  private images = Container.get(ImageService)
 
   @Get('/sources')
   async sources_(@Ctx() ctx: Context): Promise<unknown> {
     requireScope(ctx, 'content')
     const sources = await this.sources.listEnabled()
     return envelope(ctx, { sources })
+  }
+
+  @Get('/sources/:sourceId/sites')
+  async sites(@Ctx() ctx: Context, @Param('sourceId') sourceId: string): Promise<unknown> {
+    requireScope(ctx, 'content')
+    await this.sources.requireEnabled(sourceId)
+    const provider = Container.get(ProviderRegistry).comic(sourceId)
+    const config = await this.sources.contentContext(sourceId, { signal: abortOnClose(ctx) })
+    return envelope(ctx, { sites: await provider.sites(config) })
   }
 
   @Get('/comics/search')
@@ -105,22 +115,17 @@ export class ContentController {
     requireScope(ctx, 'content')
     const data = await this.comics.pages(
       comicId,
-      decodeURIComponent(chapterKey),
+      chapterKey,
       refresh === '1' || refresh === 'true',
       abortOnClose(ctx),
     )
     return envelope(ctx, data, { count: data.pages.length })
   }
 
-  @Post('/assets/prepare')
-  async prepare(
-    @Ctx() ctx: Context,
-    @Body() body: { items?: Array<{ provider: string; siteId: string; url: string }> },
-  ): Promise<unknown> {
+  @Post('/images/resolve')
+  async image(@Ctx() ctx: Context, @Body() body: ImageRef): Promise<unknown> {
     requireScope(ctx, 'content')
-    const items = body?.items
-    if (!Array.isArray(items) || items.length === 0) throw badRequest('items is required')
-    const data = this.assets.prepare(items)
-    return envelope(ctx, { assets: data })
+    ctx.set('Cache-Control', 'no-store')
+    return envelope(ctx, await this.images.resolve(body, abortOnClose(ctx)))
   }
 }

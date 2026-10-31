@@ -97,7 +97,7 @@ describe('mangayun provider (offline mock)', () => {
         data: {
           groups: Array<{
             site: { siteId: string; siteName: string; provider: string }
-            books: Array<{ comicId: string; title: string; detailUrl: string; coverAssetId: string | null }>
+            books: Array<{ comicId: string; title: string; detailUrl: string }>
           }>
         }
       }
@@ -110,7 +110,7 @@ describe('mangayun provider (offline mock)', () => {
       // detailUrl is upstream-original identity, never a proxy address.
       assert.equal(book.detailUrl, DETAIL_URL)
       assert.equal(book.comicId, bookKey('mangayun', SITE_A, DETAIL_URL))
-      assert.ok(book.coverAssetId, 'cover gets an access asset id')
+      assert.ok(book.coverUrl, 'cover remains a third-party URL')
       assert.equal(mock.signFailures(), 0, 'POST signature accepted')
       assert.equal(mock.searches(), 1)
     } finally {
@@ -119,7 +119,7 @@ describe('mangayun provider (offline mock)', () => {
     }
   })
 
-  test('detail dedupes/sorts chapters; pages keep upstream identity; images go direct + cache', async () => {
+  test('detail dedupes/sorts chapters; pages keep upstream identity; images resolve to direct URLs', async () => {
     const { server, mock, token } = await startHarness()
     const auth = { authorization: `Bearer ${token}` }
     try {
@@ -147,31 +147,24 @@ describe('mangayun provider (offline mock)', () => {
       )
       assert.equal(pagesResponse.status, 200)
       const pages = (await pagesResponse.json()) as {
-        data: { pages: Array<{ index: number; url: string; assetId: string }> }
+        data: { pages: Array<{ index: number; url: string }> }
       }
       assert.equal(pages.data.pages.length, 2)
       assert.equal(pages.data.pages[0]!.url, `${mock.base}/direct/p1.jpg`)
       assert.ok(!pages.data.pages[0]!.url.includes('/api/image'), 'not a proxy url')
 
-      // Unprotected site + reachable CDN → direct fetch, then a cache hit.
-      const first = await fetch(`${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`, {
-        headers: auth,
+      const response = await fetch(`${server.baseUrl}/api/v1/images/resolve`, {
+        method: 'POST', headers: { ...auth, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mangayun', siteId: SITE_A, url: pages.data.pages[0]!.url }),
       })
-      assert.equal(first.status, 200)
-      assert.equal(first.headers.get('x-cache'), 'MISS')
-      const bytes1 = Buffer.from(await first.arrayBuffer())
-      assert.ok(bytes1.length > 0)
-
-      const second = await fetch(`${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`, {
-        headers: auth,
-      })
-      assert.equal(second.status, 200)
-      assert.equal(second.headers.get('x-cache'), 'HIT')
-      const bytes2 = Buffer.from(await second.arrayBuffer())
-      assert.deepEqual(bytes2, bytes1)
-
-      assert.ok(mock.directHits() >= 1, 'direct CDN fetch used')
-      assert.equal(mock.relayHits(), 0, 'no relay for unprotected reachable source')
+      assert.equal(response.status, 200)
+      const access = (await response.json() as { data: { url: string; headers: Record<string,string> } }).data
+      assert.equal(access.url, `${mock.base}/direct/p1.jpg`)
+      assert.equal(mock.directHits(), 0, 'service does not download or probe images')
+      const downloaded = await fetch(access.url, { headers: access.headers })
+      assert.equal(downloaded.status, 200)
+      assert.ok((await downloaded.arrayBuffer()).byteLength > 0)
+      assert.equal(mock.relayHits(), 0)
       assert.equal(mock.signFailures(), 0)
     } finally {
       await mock.close()
@@ -179,33 +172,18 @@ describe('mangayun provider (offline mock)', () => {
     }
   })
 
-  test('images fall back to the relay when the direct CDN fetch fails', async () => {
+  test('unavailable image URLs are returned without server probing or relay fallback', async () => {
     const { server, mock, token } = await startHarness({ directMode: 'missing' })
-    const auth = { authorization: `Bearer ${token}` }
     try {
-      const comicId = await resolveComic(server, token, SITE_A, DETAIL_URL)
-      const pagesResponse = await fetch(
-        `${server.baseUrl}/api/v1/comics/${comicId}/chapters/c1/pages`,
-        { headers: auth },
-      )
-      const pages = (await pagesResponse.json()) as {
-        data: { pages: Array<{ url: string; assetId: string }> }
-      }
-      assert.equal(pages.data.pages[0]!.url, `${mock.base}/missing/p1.jpg`)
-
-      const image = await fetch(`${server.baseUrl}/api/v1/assets/${pages.data.pages[0]!.assetId}`, {
-        headers: auth,
-      })
-      assert.equal(image.status, 200)
-      assert.equal(image.headers.get('x-cache'), 'MISS')
-      const bytes = Buffer.from(await image.arrayBuffer())
-      assert.ok(bytes.length > 0)
-      assert.ok(mock.relayHits() >= 1, 'relay used after direct 404')
-      assert.equal(mock.signFailures(), 0)
-    } finally {
-      await mock.close()
-      await server.stop()
-    }
+      const url = `${mock.base}/missing/p1.jpg`
+      const response = await fetch(`${server.baseUrl}/api/v1/images/resolve`, { method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'mangayun', siteId: SITE_A, url }) })
+      assert.equal(response.status, 200)
+      assert.equal((await response.json() as { data: { url: string } }).data.url, url)
+      assert.equal(mock.directHits(), 0)
+      assert.equal(mock.relayHits(), 0)
+    } finally { await mock.close(); await server.stop() }
   })
 
   test('comicbox pages are refused; dm5 site delegates to the DM5 fallback', async () => {

@@ -8,6 +8,7 @@ import crypto from 'node:crypto'
 export const SERVER_DIR = path.join(__dirname, '..')
 
 export interface TestServer {
+  dataDir: string
   baseUrl: string
   adminBase: string
   /** Creates the admin (first call only) and returns the CSRF token + cookie header. */
@@ -23,7 +24,7 @@ let serverCount = 0
  * Start an isolated server instance: temp data dir, temp SQLite DB (schema via
  * prisma db push), fixed master key, private upstreams allowed (mocks).
  */
-export const startTestServer = async (): Promise<TestServer> => {
+export const startTestServer = async (options: { staticPath?: string; masterKey?: string } = {}): Promise<TestServer> => {
   serverCount += 1
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pordo-svc-test-${serverCount}-`))
   const dbPath = path.join(dir, 'test.db')
@@ -31,11 +32,10 @@ export const startTestServer = async (): Promise<TestServer> => {
     ...process.env,
     NODE_ENV: 'test',
     PORDO_DATA_DIR: dir,
-    PORDO_MASTER_KEY: 'test-master-key-0123456789abcdef-test',
-    PORDO_IMAGE_CACHE_DIR: path.join(dir, 'image-cache'),
+    PORDO_MASTER_KEY: options.masterKey ?? 'test-master-key-0123456789abcdef-test',
     DATABASE_URL: `file:${dbPath}`,
     PORDO_ALLOW_PRIVATE_UPSTREAMS: '1',
-    STATIC_PATH: path.join(dir, 'no-web'),
+    STATIC_PATH: options.staticPath ?? path.join(dir, 'no-web'),
     PORT: '0',
   }
   execSync('npx prisma db push --skip-generate', {
@@ -135,7 +135,7 @@ export const startTestServer = async (): Promise<TestServer> => {
     return body.data.token
   }
 
-  return { baseUrl, adminBase: `${baseUrl}/api/admin/v1`, setupAdmin, login, createDeviceToken, stop }
+  return { dataDir: dir, baseUrl, adminBase: `${baseUrl}/api/admin/v1`, setupAdmin, login, createDeviceToken, stop }
 }
 
 export interface MockHandle {

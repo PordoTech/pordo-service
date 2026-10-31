@@ -5,8 +5,7 @@
  * resolved on demand.
  */
 import { ApiError, badRequest } from '../../../shared/errors'
-import { headerValue, httpUrl, readTextLimited, sendUpstream } from '../../../shared/http'
-import type { ProviderContext } from '../types'
+import { httpUrl, readTextLimited, sendUpstream } from '../../../shared/http'
 
 const DM5_HOSTS = new Set(['www.dm5.com', 'dm5.com'])
 
@@ -296,24 +295,4 @@ export const imageUrl = (script: string, referer: URL): URL => {
     url.searchParams.append('key', variable(decoded, 'key'))
   }
   return httpUrl(url.toString())
-}
-
-/** Fetch DM5 image bytes with the mandatory chapter referer. */
-export const fetchImage = async (
-  image: URL,
-  referer: URL,
-  ctx: ProviderContext,
-): Promise<{ status: number; contentType: string; body: NodeJS.ReadableStream }> => {
-  const response = await sendUpstream({
-    url: image.toString(),
-    headers: { referer: referer.toString(), 'user-agent': 'Mozilla/5.0' },
-    proxy: ctx.proxy ?? null,
-    timeoutMs: ctx.timeoutMs,
-    signal: ctx.signal,
-  })
-  return {
-    status: response.status,
-    contentType: headerValue(response.headers, 'content-type') || 'image/jpeg',
-    body: response.body,
-  }
 }

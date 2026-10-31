@@ -30,7 +30,7 @@ export interface MangaYunMock extends MockHandle {
 }
 
 export const startMangayunMock = (
-  opts: { directMode?: 'ok' | 'missing' } = {},
+  opts: { directMode?: 'ok' | 'missing'; image?: Buffer } = {},
 ): Promise<MangaYunMock> => {
   const directMode = opts.directMode ?? 'ok'
   let relayHits = 0
@@ -50,13 +50,13 @@ export const startMangayunMock = (
     if (url.pathname === '/api/image') {
       relayHits += 1
       res.writeHead(200, { 'content-type': 'image/jpeg' })
-      res.end(imageBytes(relayHits))
+      res.end(opts.image ?? imageBytes(relayHits))
       return
     }
     if (url.pathname.startsWith('/direct/')) {
       directHits += 1
       res.writeHead(200, { 'content-type': 'image/jpeg' })
-      res.end(imageBytes(directHits))
+      res.end(opts.image ?? imageBytes(directHits))
       return
     }
     if (url.pathname.startsWith('/missing/')) {
