@@ -12,7 +12,7 @@
   - [x] 管理员初始化/登录/会话/CSRF/改密；设备 Token CRUD（明文只显示一次）
   - [x] contracts/openapi.yaml + 契约测试（Ajv 2020 校验实时响应；tests/contract.test.ts 12/12）
   - [x] web 管理 SPA（React + Vite + Tailwind）：登录/概览/源/内容测试/任务/日志/缓存/Token
-  - [ ] GitHub 公开仓库 PordoTech/pordo-service 推送
+  - [x] GitHub 公开仓库 PordoTech/pordo-service 推送（初始提交 779400c，63 文件）
 - P2 真实源与闭环：进行中
   - [x] ProviderRegistry + ComicProvider/VideoProvider 强类型接口
   - [x] Komiic 适配器（GraphQL、登录/刷新/单飞/epoch、quota 402、票据一次刷新、并发2、去重）
@@ -85,3 +85,7 @@
     24h 请求 5/失败 1、令牌 1、已解析书籍 1）；日志页渲染 5 条（200/400 各类、
     requestId/耗时/错误码齐全）；任务页空状态提示得当；内容测试页搜索/详情探针表单完整；
     退出登录→登录页→重新登录闭环正常。截图受 webview「not painted」限制略过，以 DOM 快照为证。
+- 2026-10-31 补 README.md（根）、修正 server/.env.example 的 DATABASE_URL 注释（Prisma 相对
+  prisma/ 解析，应为 file:../data/pordo.db）；git init（仓库本地身份 LChris <lchris@mac.local>），
+  审查暂存清单确认无 .env/master.key/db/node_modules/dist 入库，初始提交 779400c（63 文件），
+  gh repo create PordoTech/pordo-service --public 并推送，本地 main 与 origin/main 同步。
