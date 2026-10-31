@@ -1,0 +1,131 @@
+// Pordo content source service - SQLite schema.
+// Migrations are version managed (prisma migrate); backups must keep the
+// separate master key file to remain restorable.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String // scrypt(N=16384,r=8,p=1) with per-user salt
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AdminSession {
+  id           String   @id @default(cuid())
+  tokenHash    String   @unique // sha256(session token)
+  csrfHash     String   @unique // sha256(csrf token)
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+}
+
+model ApiToken {
+  id         String    @id @default(cuid())
+  name       String
+  tokenHash  String    @unique // sha256(plaintext device token)
+  prefix     String // first characters, display only
+  scopes     String    @default("content") // comma separated; content clients never get admin
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+model SourceConfig {
+  id          String   @id // provider id, e.g. "komiic", "mangayun"
+  enabled     Boolean  @default(true)
+  priority    Int      @default(100)
+  proxy       String? // optional upstream HTTP(S) proxy
+  timeoutMs   Int      @default(25000)
+  concurrency Int      @default(4)
+  config      String   @default("{}") // provider specific JSON (baseUrl overrides for tests, ...)
+  updatedAt   DateTime @updatedAt
+}
+
+// Single-admin deployment: at most one active account per source.
+model SourceAccount {
+  id           String   @id @default(cuid())
+  sourceId     String   @unique
+  label        String   @default("")
+  username     String // upstream login name (email); masked in API responses
+  passwordEnc  String? // AES-256-GCM(masterKey) ciphertext; null = no password stored
+  autoLogin    Boolean  @default(true)
+  credentialId String   @default("") // digest(username) - cache context isolation
+  statusJson   String   @default("{}") // last known AuthStatus snapshot (phase/nickname/quota)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Resolved comic identities. comicId == Book.key ==
+// sha256(provider + NUL + siteId + NUL + detailUrl); stable across restarts
+// and deployments. Empty-database clients populate this via /comics/resolve.
+model ComicRef {
+  id             String   @id // book key
+  provider       String
+  siteId         String
+  detailUrl      String
+  title          String   @default("")
+  coverUrl       String   @default("")
+  chapterCount   Int      @default(0)
+  lastChapterKey String   @default("")
+  resolvedAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([provider, siteId])
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  kind      String // "updates.check"
+  status    String   @default("pending") // pending|running|done|partial|failed
+  input     String   @default("{}")
+  result    String   @default("{}")
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RequestLog {
+  id         Int      @id @default(autoincrement())
+  requestId  String   @default("")
+  kind       String // "api" | "upstream" | "job"
+  sourceId   String?
+  op         String
+  status     Int?
+  errorCode  String?
+  durationMs Int      @default(0)
+  detail     String? // redacted, never contains credentials/cookies/tickets
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([kind, sourceId])
+}
+
+model CacheEntry {
+  id          String    @id // sha256(sourceId + NUL + contextId + NUL + url)
+  path        String // relative to image cache directory
+  size        Int
+  sourceId    String
+  contextId   String    @default("") // account fingerprint; isolates per-account results
+  contentType String    @default("")
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime  @default(now())
+  expiresAt   DateTime?
+  hits        Int       @default(0)
+
+  @@index([lastUsedAt])
+  @@index([sourceId])
+}
+
+model CacheSetting {
+  id         String   @id @default("default")
+  maxBytes   Int      @default(1073741824) // 1 GiB disk cap (SQLite INT max is 2 GiB - 1)
+  ttlSeconds Int      @default(1209600) // 14 days
+  updatedAt  DateTime @updatedAt
+}

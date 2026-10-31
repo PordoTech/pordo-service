@@ -1,0 +1,87 @@
+# 实施进度（可恢复）
+
+> 每完成一个可验证步骤即更新。新会话从本文件恢复上下文：先读 docs/implementation-plan.md，
+> 再按下方状态继续。
+
+## 阶段状态
+
+- P1 服务骨架与契约：进行中
+  - [x] 仓库目录 + 方案文档 docs/implementation-plan.md
+  - [x] PROGRESS.md / README / .gitignore
+  - [x] server 骨架（Koa + routing-controllers + typedi + Prisma/SQLite，strict TS）
+  - [x] 管理员初始化/登录/会话/CSRF/改密；设备 Token CRUD（明文只显示一次）
+  - [x] contracts/openapi.yaml + 契约测试（Ajv 2020 校验实时响应；tests/contract.test.ts 12/12）
+  - [x] web 管理 SPA（React + Vite + Tailwind）：登录/概览/源/内容测试/任务/日志/缓存/Token
+  - [ ] GitHub 公开仓库 PordoTech/pordo-service 推送
+- P2 真实源与闭环：进行中
+  - [x] ProviderRegistry + ComicProvider/VideoProvider 强类型接口
+  - [x] Komiic 适配器（GraphQL、登录/刷新/单飞/epoch、quota 402、票据一次刷新、并发2、去重）
+  - [x] MangaYun 适配器（签名协议、sites/search/details/chapter-images、图片直连/中继）——待离线测试
+  - [x] DM5 回退解析（page_endpoints、chapterfun.ashx、p.a.c.k.e.r 解包、一次签名刷新）——待离线测试
+  - [x] 资源 assetId（HMAC）+ 磁盘缓存（上限/TTL/账号上下文隔离）+ 流式转发
+  - [x] resolve/prepare 兼容端点；updates/check 任务 + jobs 查询
+  - [x] 管理页面完整闭环（概览/源/账号/测试/任务日志/缓存/Token）——浏览器验证通过
+  - [~] 迁移行为断言测试（离线 mock；真实源显式测试）：komiic.test.ts 8/8 通过；
+        mangayun/dm5/api 测试未写
+- P3 Pordo 接入：未开始
+  - [ ] pordo-core 服务客户端 + ComicSource 远程适配（桌面共用）
+  - [ ] pordo-android comics.rs 改服务源发现/搜索；移除 Komiic 账号 JNI/页面
+  - [ ] 服务连接设置（URL + Token 存 OS 凭据库）；旧收藏 resolve 迁移路径
+  - [ ] 清理客户端直连抓取与源账号实现（联通后）
+  - [ ] 回归：cargo fmt/clippy/test、macOS 构建、Android 构建/审计/离线 smoke
+  - [ ] 浏览器端到端验证：配置->登录->搜索->详情->取图->Token->Pordo 阅读
+  - [ ] 测量记录（RSS、耗时、缓存命中、包体/构建耗时对比）
+  - [ ] 提交：pordo-service 推送公开仓库；replayer 功能分支 + draft PR
+
+## 环境与约定
+
+- Node：使用 Homebrew node@24（安装中/已装则以其验证）；机器默认 node 为 v26。
+- 端口：服务 dev 使用 8790（避开 FlashNext :3000）；web dev 5199（vite 代理到 8790）。
+- 数据目录（不入库）：server/data/（prisma dev.db、master.key、image-cache/）。
+- Komiic 真实测试凭据：replayer/.env 的 KOMMIC_ACCOUNT/KOMMIC_PASSWORD，仅显式测试用，
+  绝不打印或提交。
+
+## 日志
+
+- 2026-10-31 创建项目骨架与方案文档；读取并确认迁移契约（source.rs/sources.rs/komiic*/dm5.rs
+  及 komiic tests.rs、auth_tests.rs 行为断言）。
+- 2026-10-31 server 全量实现 + prisma init 迁移 + 手工 smoke 通过（healthz/setup/CSRF/token/
+  resolve/comicId 对齐客户端 Book.key）。
+- 2026-10-31 修复测试基础设施与三处服务缺陷，komiic.test.ts 8/8 通过：
+  - shared/http.ts：undici.request 的 body 已是 Node 流（BodyReadable），不能再 Readable.fromWeb；
+    并为 body 挂 no-op error 监听，避免 destroy 未消费 body 时进程崩溃（UND_ERR_ABORTED）。
+  - configs/application.ts：useKoaServer 关闭 defaultErrorHandler，让错误进入 errorMiddleware
+    的 JSON 信封；直接写 ctx.body 的流式 action（asset/admin testImage）返回 ctx 短路驱动器的
+    undefined-result 404。
+  - prisma：CacheSetting.maxBytes 默认 2GiB 超出 SQLite INT，改为 1GiB 并 clamp 更新值。
+  - komiic configure()：对齐 Rust Sessions::configure——凭据不变保留会话，变更则整体替换
+    （清 cookie/terminal/manualLoginDone/phase），修复 logout 后仍 signed_in 的偏差。
+  - 测试修正：登录计数遵循 Rust 语义（失败后显式重试允许，自动重试受 backoff 阻止）；
+    refresh→guest→一次密码回退经由 UNAUTHENTICATED 触发 recover() 验证。
+  - 注意：改 schema 后需 npx prisma generate（生成的 client 内嵌默认值）。
+- 2026-10-31 编写 contracts/openapi.yaml（OpenAPI 3.1 全量路径/信封/组件）与契约测试：
+  - tests/contract.test.ts：加载 openapi.yaml，Ajv(2020-12)+ajv-formats 编译各响应 schema
+    （含 $ref 到 components/responses/ErrorEnvelope 的解析），逐一校验实时响应；
+    覆盖 admin-auth 全流程、源配置、Token 生命周期、content 全端点、assets 流式+X-Cache、
+    updates/check 202+任务视图、管理探针、概览/任务/日志/缓存、六类错误信封、改密+登出。
+  - komiic mock 抽取到 tests/mocks/komiic.ts 供行为/契约测试复用。
+  - 契约测试发现并修复 1 处实现偏差：GET /api/v1/sources 返回裸数组，按契约改为
+    { sources: [...] }（与 admin 端一致）。
+  - 语义确认：changePassword 会删除全部会话（改密后需重新登录再登出）；
+    komiic 页面 url 以配置的 baseUrl 为前缀（生产为 https://komiic.com）。
+  - npm test 增加 --test-force-exit；全套 20/20 通过（komiic 8 + contract 12）。
+- 2026-10-31 修复两处缺陷并完成 web SPA 浏览器端到端验证：
+  - RequestLog.id 由 BigInt 改 Int @default(autoincrement())：SQLite 下 BigInt 主键无
+    AUTOINCREMENT，导致每次 logRequest 插入触发 P2011（Null constraint on id）被静默
+    catch 吞掉——日志页与概览 requests24h 始终为空。同步修正 init 迁移 SQL 为
+    `INTEGER PRIMARY KEY AUTOINCREMENT`，npx prisma generate + db push 后落库正常。
+  - 资源缓存 MISS→HIT 竞态：原先 clientBody 在上游流 end 的瞬间收尾，而落盘
+    （flush→rename→cacheEntry upsert）在 done 里尚未完成，紧接的第二次请求可能仍 MISS
+    （契约测试偶发 actual MISS / expected HIT）。改为 clientBody.end() 等待 done 完成
+    （字节仍实时透传，仅推迟收尾），并把 enforceCap 改为后台执行不拖慢响应；
+    语义变为「MISS 响应结束后，后续请求保证 HIT」。连跑 3 次全套 20/20 稳定。
+  - 删除临时复现脚本 server/tmp-probe.ts。
+  - 浏览器验证（http://192.168.31.30:8790，Paseo webview）：概览实时统计（RSS 74.8MB、
+    24h 请求 5/失败 1、令牌 1、已解析书籍 1）；日志页渲染 5 条（200/400 各类、
+    requestId/耗时/错误码齐全）；任务页空状态提示得当；内容测试页搜索/详情探针表单完整；
+    退出登录→登录页→重新登录闭环正常。截图受 webview「not painted」限制略过，以 DOM 快照为证。
