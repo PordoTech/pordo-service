@@ -16,13 +16,12 @@
 - P2 真实源与闭环：进行中
   - [x] ProviderRegistry + ComicProvider/VideoProvider 强类型接口
   - [x] Komiic 适配器（GraphQL、登录/刷新/单飞/epoch、quota 402、票据一次刷新、并发2、去重）
-  - [x] MangaYun 适配器（签名协议、sites/search/details/chapter-images、图片直连/中继）——待离线测试
-  - [x] DM5 回退解析（page_endpoints、chapterfun.ashx、p.a.c.k.e.r 解包、一次签名刷新）——待离线测试
+  - [x] MangaYun 适配器（签名协议、sites/search/details/chapter-images、图片直连/中继）——离线测试通过
+  - [x] DM5 回退解析（page_endpoints、chapterfun.ashx、p.a.c.k.e.r 解包、一次签名刷新）——离线测试通过
   - [x] 资源 assetId（HMAC）+ 磁盘缓存（上限/TTL/账号上下文隔离）+ 流式转发
   - [x] resolve/prepare 兼容端点；updates/check 任务 + jobs 查询
   - [x] 管理页面完整闭环（概览/源/账号/测试/任务日志/缓存/Token）——浏览器验证通过
-  - [~] 迁移行为断言测试（离线 mock；真实源显式测试）：komiic.test.ts 8/8 通过；
-        mangayun/dm5/api 测试未写
+  - [x] 迁移行为断言测试（离线 mock；真实源显式测试）：komiic 8 + dm5 10 + mangayun 5 + api 2 + contract 12 = 37/37
 - P3 Pordo 接入：未开始
   - [ ] pordo-core 服务客户端 + ComicSource 远程适配（桌面共用）
   - [ ] pordo-android comics.rs 改服务源发现/搜索；移除 Komiic 账号 JNI/页面
@@ -89,3 +88,20 @@
   prisma/ 解析，应为 file:../data/pordo.db）；git init（仓库本地身份 LChris <lchris@mac.local>），
   审查暂存清单确认无 .env/master.key/db/node_modules/dist 入库，初始提交 779400c（63 文件），
   gh repo create PordoTech/pordo-service --public 并推送，本地 main 与 origin/main 同步。
+- 2026-10-31 补齐 P2 迁移行为测试（全套 37/37，5 套件）：
+  - tests/dm5.test.ts（10）：variable/unescapeJs/isChapter/isPage/pageEndpoints（含计数与章节
+    不匹配拒绝）/unpack（真实 p.a.c.k.e.r 符号替换、非打包透传、拒绝 eval-only 不执行）/
+    imageUrl（绝对/协议相对/pix 相对）纯函数单测；pages()/resolve() 走本地 mock——成功单次
+    取图、签名过期时章节元数据只刷新一次（stale 500→chapter html→refreshed）。
+  - tests/mocks/mangayun.ts + tests/mangayun.test.ts（5）：mock 校验 x-ym-ts/nonce/sign
+    （sha256(path|body|ts|nonce|salt)，GET 含 query），计数 direct/relay/sign 失败；
+    sites() 直连单测覆盖 GET 签名；走服务器验证 search 分组限定 id（mangayun:site-a）、
+    detailUrl 身份不被代理化、detail 去重+自然排序、pages 保留上游原图 URL、未保护源直连
+    取图 + 缓存 MISS→HIT、直连 404 时回退 /api/image 中继、comicbox 拒读、dm5 站点章节
+    图失败→回退分支按 DM5 校验章节地址（离线，不触达 dm5.com）。
+  - tests/api.test.ts（2）：updates/check 任务结果载荷（chapterCount=5、knownChapterCount→
+    newChapters=3、knownLastChapterKey→newChapters=2、latestChapterKey）；缓存上限驱逐
+    （PUT /cache maxBytes=10 同步 enforceCap→条目清零→再取图 MISS）。
+  - 发现并规避：inFlight.dedupe 对并发同资源会共享同一 PassThrough（多消费者隐患），
+    顺序 MISS→HIT 测试不触及；本轮不引入并发同资源断言，留待 P3 评估是否需 per-consumer tee。
+  - 修正 api.test.ts 一处 jobId 解构（应从 .data 取，非顶层）。
